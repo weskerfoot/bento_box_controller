@@ -1,0 +1,6 @@
+.cache
+build
+main/build
+main/Kconfig.projbuild
+sdkconfig
+sdkconfig.old
