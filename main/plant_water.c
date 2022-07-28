@@ -61,6 +61,69 @@ struct cron_t {
 
 static struct cron_t cron_specs[MAX_CRON_SPECS];
 
+static cJSON*
+serialize_cron_data(struct cron_t cron_spec) {
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddNumberToObject(result, "pump_num", cron_spec.pump_num);
+    cJSON_AddNumberToObject(result, "state", cron_spec.state);
+    cJSON_AddNumberToObject(result, "hour", cron_spec.hour);
+    cJSON_AddNumberToObject(result, "minute", cron_spec.minute);
+    cJSON_AddNumberToObject(result, "pump_on_time", cron_spec.pump_on_time);
+    cJSON_AddNumberToObject(result, "last_ran_day", cron_spec.last_ran_day);
+    cJSON_AddNumberToObject(result, "last_ran_hour", cron_spec.last_ran_hour);
+    cJSON_AddNumberToObject(result, "last_ran_minute", cron_spec.last_ran_minute);
+
+    return result;
+}
+
+static cJSON*
+serialize_cron_specs(struct cron_t cron_specs[MAX_CRON_SPECS]) {
+  cJSON *cron_spec_arr = cJSON_CreateArray();
+  for(int i = 0; i < MAX_CRON_SPECS; i++) {
+    cJSON_AddItemToArray(cron_spec_arr, serialize_cron_data(cron_specs[i]));
+  }
+  return cron_spec_arr;
+}
+
+static struct cron_t
+parse_cron_data(cJSON *json) {
+
+    cJSON *pump_num;
+    cJSON *state;
+    cJSON *pump_on_time; // time it will be on for
+    cJSON *hour; // hour to trigger in
+    cJSON *minute; // minute on the hour to trigger on
+    
+    struct cron_t cron_spec = {0};
+
+
+    if (cJSON_IsObject(json)) {
+      pump_num = cJSON_GetObjectItemCaseSensitive(json, "pump_num");
+      state = cJSON_GetObjectItemCaseSensitive(json, "state");
+      pump_on_time = cJSON_GetObjectItemCaseSensitive(json, "pump_on_time");
+      hour = cJSON_GetObjectItemCaseSensitive(json, "hour");
+      minute = cJSON_GetObjectItemCaseSensitive(json, "minute");
+
+      if (cJSON_IsNumber(pump_num) &&
+          cJSON_IsNumber(state) &&
+          cJSON_IsNumber(pump_on_time) &&
+          cJSON_IsNumber(hour) &&
+          cJSON_IsNumber(minute)) {
+        printf("Creating cron spec\n");
+        cron_spec.pump_num = pump_num->valueint;
+        cron_spec.state = state->valueint;
+        cron_spec.pump_on_time = pump_on_time->valueint;
+        cron_spec.hour = hour->valueint;
+        cron_spec.minute = minute->valueint;
+        cron_spec.last_ran_day = -1;
+        cron_spec.last_ran_hour = -1;
+        cron_spec.last_ran_minute = -1;
+        printf("Parsed: hour = %d, minute = %d\n", cron_spec.hour, cron_spec.minute);
+      }
+    }
+    return cron_spec;
+}
+
 static TickType_t
 make_delay(int seconds) {
   return (1000*seconds) / portTICK_PERIOD_MS;
@@ -172,7 +235,7 @@ pumpTimerCb(TimerHandle_t pumpTimer) {
         continue;
       }
       printf("running, hour = %d, minute = %d\n", cron_specs[i].hour, cron_specs[i].minute);
-      // refactor this bit...
+      // TODO refactor this bit, what if there are more pumps in the future?
       struct event_t message = {0};
       switch (cron_specs[i].pump_num) {
         case 0:
@@ -195,7 +258,7 @@ pumpTimerCb(TimerHandle_t pumpTimer) {
 }
 
 esp_err_t
-get_sensor_data(httpd_req_t *req) {
+get_sensor_data_handler(httpd_req_t *req) {
     time_t now;
     struct tm timeinfo;
     time(&now);
@@ -253,7 +316,7 @@ pumps_on_handler(httpd_req_t *req) {
   cJSON *pump_two_time_j = NULL;
 
   if (json != NULL) {
-    printf("%s\n", cJSON_Print(json));
+    //printf("%s\n", cJSON_Print(json));
     if (cJSON_IsObject(json)) {
       pump_one_time_j = cJSON_GetObjectItemCaseSensitive(json, "pump_1");
       pump_two_time_j = cJSON_GetObjectItemCaseSensitive(json, "pump_2");
@@ -273,13 +336,12 @@ pumps_on_handler(httpd_req_t *req) {
 }
 
 /* URI handler structure for GET /uri */
-httpd_uri_t uri_get = {
+httpd_uri_t get_sensor_data = {
     .uri      = "/sensor",
     .method   = HTTP_GET,
-    .handler  = get_sensor_data,
+    .handler  = get_sensor_data_handler,
     .user_ctx = NULL
 };
-
 
 /* URI handler structure for POST /pumps_on */
 httpd_uri_t pumps_on = {
@@ -311,41 +373,12 @@ add_cron_handler(httpd_req_t *req) {
 
   cJSON *json = cJSON_ParseWithLength(req_body, HTTPD_RESP_SIZE);
 
-  cJSON *pump_num;
-  cJSON *state;
-  cJSON *pump_on_time; // time it will be on for
-  cJSON *hour; // hour to trigger in
-  cJSON *minute; // minute on the hour to trigger on
-  
   struct cron_t cron_spec = {0};
 
   if (json != NULL) {
-    printf("%s\n", cJSON_Print(json));
-    if (cJSON_IsObject(json)) {
-      pump_num = cJSON_GetObjectItemCaseSensitive(json, "pump_num");
-      state = cJSON_GetObjectItemCaseSensitive(json, "state");
-      pump_on_time = cJSON_GetObjectItemCaseSensitive(json, "pump_on_time");
-      hour = cJSON_GetObjectItemCaseSensitive(json, "hour");
-      minute = cJSON_GetObjectItemCaseSensitive(json, "minute");
-
-      if (cJSON_IsNumber(pump_num) &&
-          cJSON_IsNumber(state) &&
-          cJSON_IsNumber(pump_on_time) &&
-          cJSON_IsNumber(hour) &&
-          cJSON_IsNumber(minute)) {
-        printf("Creating cron spec\n");
-        cron_spec.pump_num = pump_num->valueint;
-        cron_spec.state = state->valueint;
-        cron_spec.pump_on_time = pump_on_time->valueint;
-        cron_spec.hour = hour->valueint;
-        cron_spec.minute = minute->valueint;
-        cron_spec.last_ran_day = -1;
-        cron_spec.last_ran_hour = -1;
-        cron_spec.last_ran_minute = -1;
-        printf("Parsed: hour = %d, minute = %d\n", cron_spec.hour, cron_spec.minute);
-        xQueueSend(timerEventsHandle, (void*)&cron_spec, (TickType_t)0);
-      }
-    }
+    //printf("%s\n", cJSON_Print(json));
+    cron_spec = parse_cron_data(json);
+    xQueueSend(timerEventsHandle, (void*)&cron_spec, (TickType_t)0);
   }
 
   httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
@@ -362,6 +395,38 @@ httpd_uri_t add_cron = {
     .user_ctx = NULL
 };
 
+
+esp_err_t
+get_cron_data_handler(httpd_req_t *req) {
+    // TODO, figure out how large it actually is
+    char resp[HTTPD_RESP_SIZE*10] = {0};
+
+    cJSON *resp_object_j = cJSON_CreateObject();
+
+    if (resp_object_j != NULL) { cJSON_Delete(resp_object_j); }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req, HTTPD_200);
+
+    cJSON *cron_specs_j = serialize_cron_specs(cron_specs);
+
+    // TODO, figure out how large it actually is
+    cJSON_PrintPreallocated(cron_specs_j, resp, HTTPD_RESP_SIZE*10, false);
+
+    if (cron_specs_j != NULL) { cJSON_Delete(cron_specs_j); }
+
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+
+    return ESP_OK;
+}
+
+httpd_uri_t get_cron_data = {
+    .uri      = "/cron_data",
+    .method   = HTTP_GET,
+    .handler  = get_cron_data_handler,
+    .user_ctx = NULL
+};
+
 /* Function for starting the webserver */
 httpd_handle_t
 start_webserver(void) {
@@ -374,9 +439,10 @@ start_webserver(void) {
     /* Start the httpd server */
     if (httpd_start(&server, &config) == ESP_OK) {
         /* Register URI handlers */
-        httpd_register_uri_handler(server, &uri_get);
+        httpd_register_uri_handler(server, &get_sensor_data);
         httpd_register_uri_handler(server, &pumps_on);
         httpd_register_uri_handler(server, &add_cron);
+        httpd_register_uri_handler(server, &get_cron_data);
     }
     /* If server failed to start, handle will be NULL */
     ESP_LOGI(TAG, "webserver started");
@@ -626,48 +692,6 @@ ledc_init(int gpio_num,
         .hpoint         = 0
     };
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
-}
-
-void user_task (void *pvParameters)
-{
-    float temperature;
-    float humidity;
-
-    TickType_t last_wakeup = xTaskGetTickCount();
-
-    while (1) 
-    {
-        // perform one measurement and do something with the results
-        if (sht3x_measure (sensor, &temperature, &humidity))
-            printf("%.3f SHT3x Sensor: %.2f °C, %.2f %%\n", 
-                   (double)sdk_system_get_time()*1e-3, temperature, humidity);
-
-        // wait until 5 seconds are over
-        vTaskDelayUntil(&last_wakeup, 5000 / portTICK_PERIOD_MS);
-    }
-}
-
-/* -- main program ------------------------------------------------- */
-
-void user_init(void)
-{
-    // Set UART Parameter.
-    uart_set_baud(0, 115200);
-    // Give the UART some time to settle
-    vTaskDelay(1);
-    
-    // Init I2C bus interfaces at which SHT3x sensors are connected
-    // (different busses are possible).
-    i2c_init(I2C_BUS, I2C_SCL_PIN, I2C_SDA_PIN, I2C_FREQ_100K);
-    
-    // Create the sensors, multiple sensors are possible.
-    if ((sensor = sht3x_init_sensor (I2C_BUS, SHT3x_ADDR_1)))
-    {
-        // Create a user task that uses the sensors.
-        xTaskCreate(user_task, "user_task", TASK_STACK_SIZE, NULL, 2, 0);
-    }
-
-    // That's it.
 }
 
 void
