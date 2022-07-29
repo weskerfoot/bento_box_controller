@@ -61,6 +61,21 @@ struct cron_t {
 
 static struct cron_t cron_specs[MAX_CRON_SPECS];
 
+static void
+clear_cron_specs() {
+  printf("clearing all cron specs\n");
+  memset(cron_specs, 0, MAX_CRON_SPECS * sizeof (struct cron_t));
+}
+
+static void
+clear_cron_spec(int i) {
+  printf("clearing cron spec %d\n", i);
+  if (i < 0 || i >= MAX_CRON_SPECS) {
+    return;
+  }
+  memset(&cron_specs[i], 0, sizeof (struct cron_t));
+}
+
 static cJSON*
 serialize_cron_data(struct cron_t cron_spec) {
     cJSON *result = cJSON_CreateObject();
@@ -395,6 +410,81 @@ httpd_uri_t add_cron = {
     .user_ctx = NULL
 };
 
+esp_err_t
+clear_cron_handler(httpd_req_t *req) {
+  printf("clear_cron handler executed\n");
+  // TODO stream
+  char req_body[HTTPD_RESP_SIZE+1] = {0};
+  char resp[HTTPD_RESP_SIZE*10] = {0};
+
+  size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
+
+  // Receive body and do error handling
+  int ret = httpd_req_recv(req, req_body, body_size);
+
+  // if ret == 0 then no data
+  if (ret < 0) {
+    if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+      httpd_resp_send_408(req);
+    }
+    return ESP_FAIL;
+  }
+
+  int num_toks = 0;
+  int uri_size = strlen(req->uri) + 1;
+  char *uri = calloc(uri_size, 1);
+
+  if (uri != NULL) {
+    memcpy(uri, req->uri, uri_size);
+  }
+  else {
+    return ESP_FAIL;
+  }
+
+  char *token = strtok(uri, "/");
+  long cron_index = -1;
+
+  while (token != NULL) {
+    num_toks++;
+    if (num_toks == 2 && token != NULL) {
+      char *endptr;
+      errno = 0;
+      long parsed_cron_index = strtol(token, &endptr, 10);
+      if (endptr == token) { // nothing was parsed successfully because the pointer didn't move forward
+        continue;
+      }
+      if ((parsed_cron_index == LONG_MAX || parsed_cron_index == LONG_MIN) && errno == ERANGE) {
+        continue;
+      }
+      cron_index = parsed_cron_index;
+    }
+    token = strtok(NULL, uri);
+  }
+
+  if (cron_index == -1) {
+    clear_cron_specs();
+  }
+  if (cron_index >= 0 && cron_index < MAX_CRON_SPECS) {
+    clear_cron_spec(cron_index);
+  }
+
+  if (uri != NULL) { free(uri); }
+
+  cJSON *cron_specs_j = serialize_cron_specs(cron_specs);
+  cJSON_PrintPreallocated(cron_specs_j, resp, HTTPD_RESP_SIZE*10, false);
+  httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+
+  if (cron_specs_j != NULL) { cJSON_Delete(cron_specs_j); }
+  return ESP_OK;
+}
+
+/* URI handler structure for POST /add_cron */
+httpd_uri_t clear_cron = {
+    .uri      = "/clear_cron/?*",
+    .method   = HTTP_DELETE,
+    .handler  = clear_cron_handler,
+    .user_ctx = NULL
+};
 
 esp_err_t
 get_cron_data_handler(httpd_req_t *req) {
@@ -432,6 +522,7 @@ httpd_handle_t
 start_webserver(void) {
     /* Generate default configuration */
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.uri_match_fn = httpd_uri_match_wildcard;
 
     /* Empty handle to esp_http_server */
     httpd_handle_t server = NULL;
@@ -442,6 +533,7 @@ start_webserver(void) {
         httpd_register_uri_handler(server, &get_sensor_data);
         httpd_register_uri_handler(server, &pumps_on);
         httpd_register_uri_handler(server, &add_cron);
+        httpd_register_uri_handler(server, &clear_cron);
         httpd_register_uri_handler(server, &get_cron_data);
     }
     /* If server failed to start, handle will be NULL */
