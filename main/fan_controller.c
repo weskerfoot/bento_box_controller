@@ -1,4 +1,4 @@
-#include "./plant_water.h"
+#include "./fan_controller.h"
 #include "sht3x.h"
 #include "cjson.h"
 
@@ -9,49 +9,42 @@
 #define HTTPD_RESP_SIZE 100
 #define MAX_CRON_SPECS 5
 
-static const char *TAG = "pump";
+static const char *TAG = "fan";
 static sht3x_sensor_t* sensor;
 
-static void set_pump(int pump_num, int state) {
+static void set_fan(int fan_num, int state) {
     // Set duty to 100%
-    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, pump_num, state == 1 ? LEDC_DUTY: 0));
+    ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, fan_num, state == 1 ? LEDC_DUTY: 0));
     // Update duty to apply the new value
-    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, pump_num));
+    ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, fan_num));
 }
 
 static void
-pump_one_on() {
-  set_pump(0, 1);
-  set_pump(1, 0);
+fan_on() {
+  set_fan(0, 0);
+  set_fan(1, 1);
 }
 
 static void
-pump_two_on() {
-  set_pump(0, 0);
-  set_pump(1, 1);
-}
-
-static void
-pumps_off() {
-  set_pump(0, 0);
-  set_pump(1, 0);
+fans_off() {
+  set_fan(0, 0);
+  set_fan(1, 0);
 }
 
 typedef enum {
-  PUMP_ON = 1,
-  PUMP_OFF = 2,
+  fan_ON = 1,
+  fan_OFF = 2,
 } event_type;
 
 struct event_t {
-  event_type pump_1;
-  event_type pump_2;
-  int pump_delay;
+  event_type fan;
+  int fan_delay;
 };
 
 struct cron_t {
-  int pump_num;
+  int fan_num;
   int state;
-  int pump_on_time;
+  int fan_on_time;
   int hour;
   int minute;
   int last_ran_day; // day of the month it last ran
@@ -79,11 +72,11 @@ clear_cron_spec(int i) {
 static cJSON*
 serialize_cron_data(struct cron_t cron_spec) {
     cJSON *result = cJSON_CreateObject();
-    cJSON_AddNumberToObject(result, "pump_num", cron_spec.pump_num);
+    cJSON_AddNumberToObject(result, "fan_num", cron_spec.fan_num);
     cJSON_AddNumberToObject(result, "state", cron_spec.state);
     cJSON_AddNumberToObject(result, "hour", cron_spec.hour);
     cJSON_AddNumberToObject(result, "minute", cron_spec.minute);
-    cJSON_AddNumberToObject(result, "pump_on_time", cron_spec.pump_on_time);
+    cJSON_AddNumberToObject(result, "fan_on_time", cron_spec.fan_on_time);
     cJSON_AddNumberToObject(result, "last_ran_day", cron_spec.last_ran_day);
     cJSON_AddNumberToObject(result, "last_ran_hour", cron_spec.last_ran_hour);
     cJSON_AddNumberToObject(result, "last_ran_minute", cron_spec.last_ran_minute);
@@ -103,31 +96,31 @@ serialize_cron_specs(struct cron_t cron_specs[MAX_CRON_SPECS]) {
 static struct cron_t
 parse_cron_data(cJSON *json) {
 
-    cJSON *pump_num;
+    cJSON *fan_num;
     cJSON *state;
-    cJSON *pump_on_time; // time it will be on for
+    cJSON *fan_on_time; // time it will be on for
     cJSON *hour; // hour to trigger in
     cJSON *minute; // minute on the hour to trigger on
-    
+
     struct cron_t cron_spec = {0};
 
 
     if (cJSON_IsObject(json)) {
-      pump_num = cJSON_GetObjectItemCaseSensitive(json, "pump_num");
+      fan_num = cJSON_GetObjectItemCaseSensitive(json, "fan_num");
       state = cJSON_GetObjectItemCaseSensitive(json, "state");
-      pump_on_time = cJSON_GetObjectItemCaseSensitive(json, "pump_on_time");
+      fan_on_time = cJSON_GetObjectItemCaseSensitive(json, "fan_on_time");
       hour = cJSON_GetObjectItemCaseSensitive(json, "hour");
       minute = cJSON_GetObjectItemCaseSensitive(json, "minute");
 
-      if (cJSON_IsNumber(pump_num) &&
+      if (cJSON_IsNumber(fan_num) &&
           cJSON_IsNumber(state) &&
-          cJSON_IsNumber(pump_on_time) &&
+          cJSON_IsNumber(fan_on_time) &&
           cJSON_IsNumber(hour) &&
           cJSON_IsNumber(minute)) {
         printf("Creating cron spec\n");
-        cron_spec.pump_num = pump_num->valueint;
+        cron_spec.fan_num = fan_num->valueint;
         cron_spec.state = state->valueint;
-        cron_spec.pump_on_time = pump_on_time->valueint;
+        cron_spec.fan_on_time = fan_on_time->valueint;
         cron_spec.hour = hour->valueint;
         cron_spec.minute = minute->valueint;
         cron_spec.last_ran_day = -1;
@@ -145,18 +138,18 @@ make_delay(int seconds) {
 }
 
 // Timer type definitions
-const TickType_t PUMP_TIMER_DELAY = (1000*60) / portTICK_PERIOD_MS;
-const TickType_t PUMP_CB_PERIOD = (1000*10) / portTICK_PERIOD_MS;
+const TickType_t fan_TIMER_DELAY = (1000*60) / portTICK_PERIOD_MS;
+const TickType_t fan_CB_PERIOD = (1000*10) / portTICK_PERIOD_MS;
 
-TimerHandle_t pumpTimer = 0; // Timer for toggling the pumps on/off
-StaticTimer_t pumpTimerBuffer; // Memory backing for the timer, allocated statically
+TimerHandle_t fanTimer = 0; // Timer for toggling the fans on/off
+StaticTimer_t fanTimerBuffer; // Memory backing for the timer, allocated statically
 
 // Queue type definitions
-uint8_t queueStorage[PUMP_EV_NUM*sizeof (struct event_t)]; // byte array for queue memory
-static StaticQueue_t pumpEvents;
-QueueHandle_t pumpEventsHandle;
+uint8_t queueStorage[FAN_EV_NUM*sizeof (struct event_t)]; // byte array for queue memory
+static StaticQueue_t fanEvents;
+QueueHandle_t fanEventsHandle;
 
-uint8_t timerQueueStorage[PUMP_EV_NUM*sizeof (struct cron_t)]; // byte array for queue memory
+uint8_t timerQueueStorage[FAN_EV_NUM*sizeof (struct cron_t)]; // byte array for queue memory
 static StaticQueue_t timerEvents;
 QueueHandle_t timerEventsHandle;
 
@@ -166,8 +159,8 @@ StaticTask_t xTaskBuffer;
 StackType_t xStack[TASK_STACK_SIZE];
 
 void
-pumpRunnerTaskFunction(void *params) {
-  struct event_t pumpMessage;
+fanRunnerTaskFunction(void *params) {
+  struct event_t fanMessage;
 
   printf("Task started\n");
 
@@ -176,27 +169,24 @@ pumpRunnerTaskFunction(void *params) {
   while (1) {
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
-    if (pumpEventsHandle != NULL) {
+    if (fanEventsHandle != NULL) {
       // The queue exists and is created
-      if (xQueueReceive(pumpEventsHandle, &pumpMessage, (TickType_t)PUMP_TIMER_DELAY) == pdPASS) {
-        printf("got a message, pump_1 = %u, pump_2 = %u, PUMP_ON = %u, PUMP_OFF = %u\n", pumpMessage.pump_1, pumpMessage.pump_2, PUMP_ON, PUMP_OFF);
-        if (pumpMessage.pump_1 == PUMP_ON) {
-          pump_one_on();
+      if (xQueueReceive(fanEventsHandle, &fanMessage, (TickType_t)fan_TIMER_DELAY) == pdPASS) {
+        printf("got a message, fan = %u, fan_ON = %u, fan_OFF = %u\n", fanMessage.fan, fan_ON, fan_OFF);
+        if (fanMessage.fan == fan_ON) {
+          fan_on();
         }
-        if (pumpMessage.pump_2 == PUMP_ON) {
-          pump_two_on();
-        }
-        vTaskDelay(pumpMessage.pump_delay);
-        pumps_off();
+        vTaskDelay(fanMessage.fan_delay);
+        fans_off();
       }
     }
   }
 }
 
 static void
-createPumpRunnerTask(void) {
-  xTaskCreateStatic(pumpRunnerTaskFunction,
-                    "pumpt",
+createfanRunnerTask(void) {
+  xTaskCreateStatic(fanRunnerTaskFunction,
+                    "fant",
                      TASK_STACK_SIZE,
                      (void*)1,
                      tskIDLE_PRIORITY + 2,
@@ -206,36 +196,29 @@ createPumpRunnerTask(void) {
 
 
 void
-runPumps(int delay1, int delay2) {
+runfans(int delay2) {
   struct event_t message;
-  message.pump_1 = PUMP_ON;
-  message.pump_2 = PUMP_OFF;
-  message.pump_delay = make_delay(delay1);
+  message.fan = fan_ON;
+  message.fan_delay = make_delay(delay2);
 
-  xQueueSend(pumpEventsHandle, (void*)&message, (TickType_t)0);
-
-  message.pump_2 = PUMP_ON;
-  message.pump_1 = PUMP_OFF;
-  message.pump_delay = make_delay(delay2);
-
-  xQueueSend(pumpEventsHandle, (void*)&message, (TickType_t)0);
+  xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
 }
 
 void
-pumpTimerCb(TimerHandle_t pumpTimer) {
+fanTimerCb(TimerHandle_t fanTimer) {
   time_t now;
   struct tm timeinfo;
   time(&now);
   localtime_r(&now, &timeinfo);
-  struct cron_t pump_timer_config;
+  struct cron_t fan_timer_config;
   static int next_cron_spec = 0;
 
   if (timerEventsHandle != NULL) {
-    if (xQueueReceive(timerEventsHandle, &pump_timer_config, (TickType_t)0) == pdPASS) {
+    if (xQueueReceive(timerEventsHandle, &fan_timer_config, (TickType_t)0) == pdPASS) {
       printf("Got a new cron spec\n");
-      cron_specs[next_cron_spec] = pump_timer_config;
+      cron_specs[next_cron_spec] = fan_timer_config;
       next_cron_spec = (next_cron_spec + 1) % MAX_CRON_SPECS;
-      printf("new: hour = %d, minute = %d\n", pump_timer_config.hour, pump_timer_config.minute);
+      printf("new: hour = %d, minute = %d\n", fan_timer_config.hour, fan_timer_config.minute);
     }
   }
 
@@ -250,20 +233,18 @@ pumpTimerCb(TimerHandle_t pumpTimer) {
         continue;
       }
       printf("running, hour = %d, minute = %d\n", cron_specs[i].hour, cron_specs[i].minute);
-      // TODO refactor this bit, what if there are more pumps in the future?
+      // TODO refactor this bit, what if there are more fans in the future?
       struct event_t message = {0};
-      switch (cron_specs[i].pump_num) {
+      switch (cron_specs[i].fan_num) {
         case 0:
-          message.pump_1 = PUMP_ON;
-          message.pump_2 = PUMP_OFF;
+          message.fan = fan_OFF;
           break;
         case 1:
-          message.pump_2 = PUMP_ON;
-          message.pump_1 = PUMP_OFF;
+          message.fan = fan_ON;
           break;
       }
-      message.pump_delay = make_delay(cron_specs[i].pump_on_time);
-      xQueueSend(pumpEventsHandle, (void*)&message, (TickType_t)0);
+      message.fan_delay = make_delay(cron_specs[i].fan_on_time);
+      xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
 
       cron_specs[i].last_ran_day = timeinfo.tm_mday;
       cron_specs[i].last_ran_hour = timeinfo.tm_hour;
@@ -306,8 +287,8 @@ get_sensor_data_handler(httpd_req_t *req) {
 }
 
 esp_err_t
-pumps_on_handler(httpd_req_t *req) {
-  printf("pumps_on_handler executed\n");
+fans_on_handler(httpd_req_t *req) {
+  printf("fans_on_handler executed\n");
   // TODO stream
   char req_body[HTTPD_RESP_SIZE+1] = {0};
   char resp[HTTPD_RESP_SIZE] = {0};
@@ -327,19 +308,15 @@ pumps_on_handler(httpd_req_t *req) {
 
   cJSON *json = cJSON_ParseWithLength(req_body, HTTPD_RESP_SIZE);
 
-  cJSON *pump_one_time_j = NULL;
-  cJSON *pump_two_time_j = NULL;
+  cJSON *fan_time_j = NULL;
 
   if (json != NULL) {
     //printf("%s\n", cJSON_Print(json));
     if (cJSON_IsObject(json)) {
-      pump_one_time_j = cJSON_GetObjectItemCaseSensitive(json, "pump_1");
-      pump_two_time_j = cJSON_GetObjectItemCaseSensitive(json, "pump_2");
-      if (cJSON_IsNumber(pump_one_time_j) && cJSON_IsNumber(pump_two_time_j)) {
-        if (pump_one_time_j->valueint > 0 && pump_two_time_j->valueint > 0) {
-          printf("Running pumps: p1 = %d, p2 = %d\n", pump_one_time_j->valueint, pump_two_time_j->valueint);
-          runPumps(pump_one_time_j->valueint, pump_two_time_j->valueint);
-        }
+      fan_time_j = cJSON_GetObjectItemCaseSensitive(json, "fan");
+      if (cJSON_IsNumber(fan_time_j)) {
+        printf("Running fans: time = %d\n", fan_time_j->valueint);
+        runfans(fan_time_j->valueint);
       }
     }
   }
@@ -358,11 +335,11 @@ httpd_uri_t get_sensor_data = {
     .user_ctx = NULL
 };
 
-/* URI handler structure for POST /pumps_on */
-httpd_uri_t pumps_on = {
-    .uri      = "/pumps_on",
+/* URI handler structure for POST /fans_on */
+httpd_uri_t fans_on = {
+    .uri      = "/fans_on",
     .method   = HTTP_POST,
-    .handler  = pumps_on_handler,
+    .handler  = fans_on_handler,
     .user_ctx = NULL
 };
 
@@ -531,7 +508,7 @@ start_webserver(void) {
     if (httpd_start(&server, &config) == ESP_OK) {
         /* Register URI handlers */
         httpd_register_uri_handler(server, &get_sensor_data);
-        httpd_register_uri_handler(server, &pumps_on);
+        httpd_register_uri_handler(server, &fans_on);
         httpd_register_uri_handler(server, &add_cron);
         httpd_register_uri_handler(server, &clear_cron);
         httpd_register_uri_handler(server, &get_cron_data);
@@ -824,24 +801,23 @@ app_main(void) {
             vTaskDelay(2000 / portTICK_PERIOD_MS);
         }
     }
-    pumpEventsHandle = xQueueCreateStatic(PUMP_EV_NUM, sizeof (struct event_t), queueStorage, &pumpEvents);
-    timerEventsHandle = xQueueCreateStatic(PUMP_EV_NUM, sizeof (struct cron_t), timerQueueStorage, &timerEvents);
+    fanEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct event_t), queueStorage, &fanEvents);
+    timerEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct cron_t), timerQueueStorage, &timerEvents);
 
-    configASSERT(pumpEventsHandle);
+    configASSERT(fanEventsHandle);
     configASSERT(timerEventsHandle);
 
-    pumpTimer = xTimerCreateStatic("pump timer", PUMP_CB_PERIOD, pdTRUE, (void*)0, pumpTimerCb, &pumpTimerBuffer);
-    xTimerStart(pumpTimer, 0);
+    fanTimer = xTimerCreateStatic("fan timer", fan_CB_PERIOD, pdTRUE, (void*)0, fanTimerCb, &fanTimerBuffer);
+    xTimerStart(fanTimer, 0);
 
-    // Pump stuff
+    // fan stuff
     // Set the LEDC peripheral configuration
-    ledc_init(18, 0, 0);
-    ledc_init(19, 1, 1);
+    ledc_init(LEDC_OUTPUT_IO_2, 1, 1);
 
     i2c_init(I2C_BUS, I2C_SCL_PIN, I2C_SDA_PIN, I2C_FREQ_100K);
 
     // Create the sensors, multiple sensors are possible.
     sensor = sht3x_init_sensor(I2C_BUS, SHT3x_ADDR_1);
 
-    createPumpRunnerTask();
+    createfanRunnerTask();
 }

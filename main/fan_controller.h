@@ -38,19 +38,18 @@
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
 #define LEDC_OUTPUT_IO_1  (18) // Define the output GPIO
 #define LEDC_OUTPUT_IO_2  (19) // Define the output GPIO
-#define LEDC_CHANNEL_1  0
 #define LEDC_CHANNEL_2  1
 #define LEDC_DUTY_RES LEDC_TIMER_13_BIT // Set duty resolution to 13 bits
 #define LEDC_DUTY (8191) // Set duty to 100%. ((2 ** 13) - 1) * 50% = 4095
 #define LEDC_FREQUENCY (5000) // Frequency in Hertz. Set frequency at 5 kHz
 
-#define EXAMPLE_ESP_WIFI_SSID      CONFIG_SSID
-#define EXAMPLE_ESP_WIFI_PASS      CONFIG_PASSWORD
+#define EXAMPLE_ESP_WIFI_SSID      "metaverse_2ghz"
+#define EXAMPLE_ESP_WIFI_PASS      "rbsjrgxfpw"
 #define EXAMPLE_ESP_MAXIMUM_RETRY  10
 
 #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
 
-#define PUMP_EV_NUM 5
+#define FAN_EV_NUM 5
 
 /* The event group allows multiple bits for each event, but we only care about two events:
  * - we are connected to the AP with an IP
