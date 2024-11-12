@@ -32,8 +32,8 @@ fans_off() {
 }
 
 typedef enum {
-  fan_ON = 1,
-  fan_OFF = 2,
+  FAN_ON = 1,
+  FAN_OFF = 2,
 } event_type;
 
 struct event_t {
@@ -172,8 +172,8 @@ fanRunnerTaskFunction(void *params) {
     if (fanEventsHandle != NULL) {
       // The queue exists and is created
       if (xQueueReceive(fanEventsHandle, &fanMessage, (TickType_t)fan_TIMER_DELAY) == pdPASS) {
-        printf("got a message, fan = %u, fan_ON = %u, fan_OFF = %u\n", fanMessage.fan, fan_ON, fan_OFF);
-        if (fanMessage.fan == fan_ON) {
+        printf("got a message, fan = %u, FAN_ON = %u, FAN_OFF = %u\n", fanMessage.fan, FAN_ON, FAN_OFF);
+        if (fanMessage.fan == FAN_ON) {
           fan_on();
         }
         vTaskDelay(fanMessage.fan_delay);
@@ -198,7 +198,7 @@ createfanRunnerTask(void) {
 void
 runfans(int delay2) {
   struct event_t message;
-  message.fan = fan_ON;
+  message.fan = FAN_ON;
   message.fan_delay = make_delay(delay2);
 
   xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
@@ -237,10 +237,10 @@ fanTimerCb(TimerHandle_t fanTimer) {
       struct event_t message = {0};
       switch (cron_specs[i].fan_num) {
         case 0:
-          message.fan = fan_OFF;
+          message.fan = FAN_OFF;
           break;
         case 1:
-          message.fan = fan_ON;
+          message.fan = FAN_ON;
           break;
       }
       message.fan_delay = make_delay(cron_specs[i].fan_on_time);
