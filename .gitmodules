@@ -1,3 +1,6 @@
 [submodule "components/gfx"]
 	path = components/gfx_component/gfx
 	url = https://github.com/codewitch-honey-crisis/gfx.git
+[submodule "components/gfx_component/htcw_io"]
+	path = components/gfx_component/htcw_io
+	url = https://github.com/codewitch-honey-crisis/htcw_io.git

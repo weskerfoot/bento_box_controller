@@ -9,7 +9,7 @@
 #define HTTPD_RESP_SIZE 100
 #define MAX_CRON_SPECS 5
 
-static const char *TAG = "fan";
+static const char *TAG = "fan_controller";
 static sht3x_sensor_t* sensor;
 
 static void set_fan(int fan_num, int state) {
@@ -53,6 +53,76 @@ struct cron_t {
 };
 
 static struct cron_t cron_specs[MAX_CRON_SPECS];
+
+// MQTT callback
+static void
+mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
+  ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%" PRIi32, base, event_id);
+  esp_mqtt_event_handle_t event = event_data;
+  esp_mqtt_client_handle_t client = event->client;
+  int msg_id;
+  switch ((esp_mqtt_event_id_t)event_id) {
+  case MQTT_EVENT_CONNECTED:
+      ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
+      msg_id = esp_mqtt_client_subscribe(client, "device/" SERIAL_NUMBER "/report", 0);
+      ESP_LOGI(TAG, "sent subscribe successful, msg_id=%d", msg_id);
+      break;
+  case MQTT_EVENT_DISCONNECTED:
+      ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
+      break;
+
+  case MQTT_EVENT_SUBSCRIBED:
+      ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
+      msg_id = esp_mqtt_client_publish(client, "/topic/qos0", "data", 0, 0, 0);
+      ESP_LOGI(TAG, "sent publish successful, msg_id=%d", msg_id);
+      break;
+  case MQTT_EVENT_UNSUBSCRIBED:
+      ESP_LOGI(TAG, "MQTT_EVENT_UNSUBSCRIBED, msg_id=%d", event->msg_id);
+      break;
+  case MQTT_EVENT_PUBLISHED:
+      ESP_LOGI(TAG, "MQTT_EVENT_PUBLISHED, msg_id=%d", event->msg_id);
+      break;
+  case MQTT_EVENT_DATA:
+      ESP_LOGI(TAG, "MQTT_EVENT_DATA");
+      printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+      printf("DATA=%.*s\r\n", event->data_len, event->data);
+      break;
+  case MQTT_EVENT_ERROR:
+      ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
+      if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+          ESP_LOGI(TAG, "Last error code reported from esp-tls: 0x%x", event->error_handle->esp_tls_last_esp_err);
+          ESP_LOGI(TAG, "Last tls stack error number: 0x%x", event->error_handle->esp_tls_stack_err);
+          ESP_LOGI(TAG, "Last captured errno : %d (%s)",  event->error_handle->esp_transport_sock_errno,
+                   strerror(event->error_handle->esp_transport_sock_errno));
+      } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+          ESP_LOGI(TAG, "Connection refused error: 0x%x", event->error_handle->connect_return_code);
+      } else {
+          ESP_LOGW(TAG, "Unknown error type: 0x%x", event->error_handle->error_type);
+      }
+      break;
+  default:
+      ESP_LOGI(TAG, "Other event id:%d", event->event_id);
+      break;
+  }
+
+}
+
+static void
+mqtt_app_start(void) {
+  const esp_mqtt_client_config_t mqtt_cfg = {
+    .broker = {
+      .address.uri = CONFIG_BROKER_URI
+      //.verification.certificate = (const char *)bbl_ca_pem
+    },
+  };
+
+  ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
+  esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+  /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
+  esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+  esp_mqtt_client_start(client);
+
+}
 
 static void
 clear_cron_specs() {
@@ -233,7 +303,6 @@ fanTimerCb(TimerHandle_t fanTimer) {
         continue;
       }
       printf("running, hour = %d, minute = %d\n", cron_specs[i].hour, cron_specs[i].minute);
-      // TODO refactor this bit, what if there are more fans in the future?
       struct event_t message = {0};
       switch (cron_specs[i].fan_num) {
         case 0:
@@ -520,26 +589,6 @@ start_webserver(void) {
 
 static SemaphoreHandle_t s_semph_get_ip_addrs;
 
-/* tear down connection, release resources */
-static void
-stop(void) {
-#if CONFIG_EXAMPLE_CONNECT_WIFI
-    wifi_stop();
-    s_active_interfaces--;
-#endif
-}
-
-esp_err_t
-wifi_disconnect(void) {
-    if (s_semph_get_ip_addrs == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    vSemaphoreDelete(s_semph_get_ip_addrs);
-    s_semph_get_ip_addrs = NULL;
-    stop();
-    ESP_ERROR_CHECK(esp_unregister_shutdown_handler(&stop));
-    return ESP_OK;
-}
 #ifndef INET6_ADDRSTRLEN
 #define INET6_ADDRSTRLEN 48
 #endif
@@ -644,7 +693,7 @@ event_handler(void *arg,
         esp_wifi_connect();
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-      if (s_retry_num < EXAMPLE_ESP_MAXIMUM_RETRY) {
+      if (s_retry_num < MAXIMUM_RETRY) {
           esp_wifi_connect();
           s_retry_num++;
           ESP_LOGI(TAG, "retry to connect to the AP");
@@ -694,8 +743,8 @@ wifi_init_sta(void) {
 
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = EXAMPLE_ESP_WIFI_SSID,
-            .password = EXAMPLE_ESP_WIFI_PASS,
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASS,
             /* Setting a password implies station will connect to all security modes including WEP/WPA.
              * However these modes are deprecated and not advisable to be used. Incase your Access point
              * doesn't support WPA2, these mode can be enabled by commenting below line */
@@ -720,16 +769,17 @@ wifi_init_sta(void) {
      * happened. */
     if (bits & WIFI_CONNECTED_BIT) {
         ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
+                 WIFI_SSID, WIFI_PASS);
 
         httpd_handle_t server;
         printf("Trying to start webserver\n");
         server = start_webserver();
+        mqtt_app_start();
 
     }
     else if (bits & WIFI_FAIL_BIT) {
         ESP_LOGI(TAG, "Failed to connect to SSID:%s, password:%s",
-                 EXAMPLE_ESP_WIFI_SSID, EXAMPLE_ESP_WIFI_PASS);
+                 WIFI_SSID, WIFI_PASS);
     }
     else {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
