@@ -61,6 +61,12 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
   esp_mqtt_event_handle_t event = event_data;
   esp_mqtt_client_handle_t client = event->client;
   int msg_id;
+  cJSON *mqtt_data;
+  char *json_st;
+
+  // whether the printer is currently running or not
+  static int printer_state = 0;
+
   switch ((esp_mqtt_event_id_t)event_id) {
   case MQTT_EVENT_CONNECTED:
       ESP_LOGI(TAG, "MQTT_EVENT_CONNECTED");
@@ -84,8 +90,30 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
       break;
   case MQTT_EVENT_DATA:
       ESP_LOGI(TAG, "MQTT_EVENT_DATA");
-      printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
-      printf("DATA=%.*s\r\n", event->data_len, event->data);
+      if (event->topic_len > 0 && event->data_len > 0) {
+        printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+        mqtt_data = cJSON_ParseWithLength(event->data, event->data_len);
+        if (mqtt_data != NULL) {
+          json_st = cJSON_Print(mqtt_data);
+          if (json_st != NULL) {
+            printf("json_st = %s\n", json_st);
+            free(json_st);
+          } // REPLACE WITH STATIC ARRAY
+
+          cJSON *print_object = cJSON_GetObjectItemCaseSensitive(mqtt_data, "print");
+          if (cJSON_IsObject(print_object)) {
+            printf("got print object\n");
+            cJSON *gcode_state = cJSON_GetObjectItemCaseSensitive(print_object, "gcode_state");
+            if (cJSON_IsString(gcode_state) && gcode_state->valuestring != NULL) {
+              printf("got gcode_state\n");
+              if (strncmp(gcode_state->valuestring, "RUNNING", strlen(gcode_state->valuestring))) {
+                runfans(10);
+              }
+            }
+          }
+          cJSON_Delete(mqtt_data);
+        }
+      }
       break;
   case MQTT_EVENT_ERROR:
       ESP_LOGI(TAG, "MQTT_EVENT_ERROR");
@@ -380,7 +408,6 @@ fans_on_handler(httpd_req_t *req) {
   cJSON *fan_time_j = NULL;
 
   if (json != NULL) {
-    //printf("%s\n", cJSON_Print(json));
     if (cJSON_IsObject(json)) {
       fan_time_j = cJSON_GetObjectItemCaseSensitive(json, "fan");
       if (cJSON_IsNumber(fan_time_j)) {
@@ -534,7 +561,6 @@ httpd_uri_t clear_cron = {
 
 esp_err_t
 get_cron_data_handler(httpd_req_t *req) {
-    // TODO, figure out how large it actually is
     char resp[HTTPD_RESP_SIZE*10] = {0};
 
     cJSON *resp_object_j = cJSON_CreateObject();
@@ -546,7 +572,6 @@ get_cron_data_handler(httpd_req_t *req) {
 
     cJSON *cron_specs_j = serialize_cron_specs(cron_specs);
 
-    // TODO, figure out how large it actually is
     cJSON_PrintPreallocated(cron_specs_j, resp, HTTPD_RESP_SIZE*10, false);
 
     if (cron_specs_j != NULL) { cJSON_Delete(cron_specs_j); }

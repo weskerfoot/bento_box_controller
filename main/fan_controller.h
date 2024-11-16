@@ -174,3 +174,6 @@ unsigned char bbl_ca_pem[] = {
   0x0a, 0x00
 };
 unsigned int bbl_ca_pem_len = 1238;
+
+
+void runfans(int);
