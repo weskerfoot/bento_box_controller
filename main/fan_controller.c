@@ -2,15 +2,9 @@
 #include "sht3x.h"
 #include "cjson.h"
 
-#define I2C_BUS       0
-#define I2C_SCL_PIN   22
-#define I2C_SDA_PIN   21
-
-#define HTTPD_RESP_SIZE 100
-#define MAX_CRON_SPECS 5
-
 static const char *TAG = "fan_controller";
 static sht3x_sensor_t* sensor;
+static sgp40_t air_q_sensor;
 
 static void set_fan(int fan_num, int state) {
     // Set duty to 100%
@@ -53,6 +47,15 @@ struct cron_t {
 };
 
 static struct cron_t cron_specs[MAX_CRON_SPECS];
+
+void
+initSGP40() {
+    ESP_ERROR_CHECK(i2cdev_init());
+    ESP_ERROR_CHECK(sgp40_init_desc(&air_q_sensor, AC_I2C_BUS, AC_SDA, AC_SCL));
+    ESP_ERROR_CHECK(sgp40_init(&air_q_sensor));
+    ESP_LOGI(TAG, "SGP40 initilalized. Serial: 0x%04x%04x%04x",
+            air_q_sensor.serial[0], air_q_sensor.serial[1], air_q_sensor.serial[2]);
+}
 
 // MQTT callback
 static void
@@ -364,9 +367,14 @@ get_sensor_data_handler(httpd_req_t *req) {
 
     cJSON *resp_object_j = cJSON_CreateObject();
 
+    uint16_t voc_index;
+
+    ESP_ERROR_CHECK(sgp40_measure_raw(&air_q_sensor, humidity, temperature, &voc_index));
+
     if (sht3x_measure(sensor, &temperature, &humidity)) {
       cJSON_AddNumberToObject(resp_object_j, "temperature", (double)temperature);
       cJSON_AddNumberToObject(resp_object_j, "humidity", (double)humidity);
+      cJSON_AddNumberToObject(resp_object_j, "voc_index", (double)voc_index);
     }
 
     cJSON_AddNumberToObject(resp_object_j, "hour", (double)timeinfo.tm_hour);
@@ -890,9 +898,11 @@ app_main(void) {
     ledc_init(LEDC_OUTPUT_IO_2, 1, 1);
 
     i2c_init(I2C_BUS, I2C_SCL_PIN, I2C_SDA_PIN, I2C_FREQ_100K);
+    //i2c_init(I2C_BUS_2, AC_SCL, AC_SDA, I2C_FREQ_100K);
 
     // Create the sensors, multiple sensors are possible.
     sensor = sht3x_init_sensor(I2C_BUS, SHT3x_ADDR_1);
+    initSGP40();
 
     createfanRunnerTask();
 }

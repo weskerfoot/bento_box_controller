@@ -37,6 +37,7 @@
 #include <sys/param.h>
 #include <sys/time.h>
 #include <time.h>
+#include <sgp40.h>
 #include "sdkconfig.h"
 
 #define WIFI_SSID CONFIG_ESP_WIFI_SSID
@@ -55,9 +56,20 @@
 #define LEDC_DUTY (255) // Set duty cycle, ((2 ** n_bits) - 1) * percentage = duty cycle
 #define LEDC_FREQUENCY (10000) // Frequency in Hertz. Set frequency at 10 kHz
 
+#define I2C_BUS       0
+#define I2C_SCL_PIN   22
+#define I2C_SDA_PIN   21
+
+// Separate bus for air quality sensor
+#define AC_I2C_BUS 1
+#define AC_SCL 32
+#define AC_SDA 18
+
 #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
 
 #define FAN_EV_NUM 5
+#define HTTPD_RESP_SIZE 100
+#define MAX_CRON_SPECS 5
 
 /* The event group allows multiple bits for each event, but we only care about two events:
  * - we are connected to the AP with an IP
