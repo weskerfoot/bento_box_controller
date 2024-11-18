@@ -373,9 +373,14 @@ get_sensor_data_handler(httpd_req_t *req) {
       cJSON_AddNumberToObject(resp_object_j, "temperature", (double)temperature);
       cJSON_AddNumberToObject(resp_object_j, "humidity", (double)humidity);
 
-      ESP_ERROR_CHECK(sgp40_measure_raw(&air_q_sensor, humidity, temperature, &voc_index));
+      esp_err_t sgp40_status = sgp40_measure_raw(&air_q_sensor,
+                                                 humidity,
+                                                 temperature,
+                                                 &voc_index); // FIXME check if it errored out gracefully
 
-      cJSON_AddNumberToObject(resp_object_j, "voc_index", (double)voc_index);
+      if (sgp40_status == ESP_OK) {
+        cJSON_AddNumberToObject(resp_object_j, "voc_index", (double)voc_index);
+      }
     }
 
     cJSON_AddNumberToObject(resp_object_j, "hour", (double)timeinfo.tm_hour);
