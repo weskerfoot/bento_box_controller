@@ -369,11 +369,12 @@ get_sensor_data_handler(httpd_req_t *req) {
 
     uint16_t voc_index;
 
-    ESP_ERROR_CHECK(sgp40_measure_raw(&air_q_sensor, humidity, temperature, &voc_index));
-
     if (sht3x_measure(sensor, &temperature, &humidity)) {
       cJSON_AddNumberToObject(resp_object_j, "temperature", (double)temperature);
       cJSON_AddNumberToObject(resp_object_j, "humidity", (double)humidity);
+
+      ESP_ERROR_CHECK(sgp40_measure_raw(&air_q_sensor, humidity, temperature, &voc_index));
+
       cJSON_AddNumberToObject(resp_object_j, "voc_index", (double)voc_index);
     }
 
