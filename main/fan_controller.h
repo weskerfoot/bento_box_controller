@@ -68,7 +68,7 @@
 #define ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
 
 #define FAN_EV_NUM 5
-#define HTTPD_RESP_SIZE 100
+#define HTTPD_RESP_SIZE 1000
 #define MAX_CRON_SPECS 5
 
 /* The event group allows multiple bits for each event, but we only care about two events:

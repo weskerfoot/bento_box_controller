@@ -35,19 +35,6 @@ struct event_t {
   int fan_delay;
 };
 
-struct cron_t {
-  int fan_num;
-  int state;
-  int fan_on_time;
-  int hour;
-  int minute;
-  int last_ran_day; // day of the month it last ran
-  int last_ran_minute; // minute it last ran
-  int last_ran_hour; // hour it last ran
-};
-
-static struct cron_t cron_specs[MAX_CRON_SPECS];
-
 void
 initSGP40() {
     ESP_ERROR_CHECK(i2cdev_init());
@@ -97,11 +84,14 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
         printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
         mqtt_data = cJSON_ParseWithLength(event->data, event->data_len);
         if (mqtt_data != NULL) {
+
+          #ifdef CONFIG_DEBUG_MODE_ENABLED
           json_st = cJSON_Print(mqtt_data);
           if (json_st != NULL) {
             printf("json_st = %s\n", json_st);
             free(json_st);
-          } // REPLACE WITH STATIC ARRAY
+          }
+          #endif
 
           cJSON *print_object = cJSON_GetObjectItemCaseSensitive(mqtt_data, "print");
           if (cJSON_IsObject(print_object)) {
@@ -155,84 +145,6 @@ mqtt_app_start(void) {
 
 }
 
-static void
-clear_cron_specs() {
-  printf("clearing all cron specs\n");
-  memset(cron_specs, 0, MAX_CRON_SPECS * sizeof (struct cron_t));
-}
-
-static void
-clear_cron_spec(int i) {
-  printf("clearing cron spec %d\n", i);
-  if (i < 0 || i >= MAX_CRON_SPECS) {
-    return;
-  }
-  memset(&cron_specs[i], 0, sizeof (struct cron_t));
-}
-
-static cJSON*
-serialize_cron_data(struct cron_t cron_spec) {
-    cJSON *result = cJSON_CreateObject();
-    cJSON_AddNumberToObject(result, "fan_num", cron_spec.fan_num);
-    cJSON_AddNumberToObject(result, "state", cron_spec.state);
-    cJSON_AddNumberToObject(result, "hour", cron_spec.hour);
-    cJSON_AddNumberToObject(result, "minute", cron_spec.minute);
-    cJSON_AddNumberToObject(result, "fan_on_time", cron_spec.fan_on_time);
-    cJSON_AddNumberToObject(result, "last_ran_day", cron_spec.last_ran_day);
-    cJSON_AddNumberToObject(result, "last_ran_hour", cron_spec.last_ran_hour);
-    cJSON_AddNumberToObject(result, "last_ran_minute", cron_spec.last_ran_minute);
-
-    return result;
-}
-
-static cJSON*
-serialize_cron_specs(struct cron_t cron_specs[MAX_CRON_SPECS]) {
-  cJSON *cron_spec_arr = cJSON_CreateArray();
-  for(int i = 0; i < MAX_CRON_SPECS; i++) {
-    cJSON_AddItemToArray(cron_spec_arr, serialize_cron_data(cron_specs[i]));
-  }
-  return cron_spec_arr;
-}
-
-static struct cron_t
-parse_cron_data(cJSON *json) {
-
-    cJSON *fan_num;
-    cJSON *state;
-    cJSON *fan_on_time; // time it will be on for
-    cJSON *hour; // hour to trigger in
-    cJSON *minute; // minute on the hour to trigger on
-
-    struct cron_t cron_spec = {0};
-
-
-    if (cJSON_IsObject(json)) {
-      fan_num = cJSON_GetObjectItemCaseSensitive(json, "fan_num");
-      state = cJSON_GetObjectItemCaseSensitive(json, "state");
-      fan_on_time = cJSON_GetObjectItemCaseSensitive(json, "fan_on_time");
-      hour = cJSON_GetObjectItemCaseSensitive(json, "hour");
-      minute = cJSON_GetObjectItemCaseSensitive(json, "minute");
-
-      if (cJSON_IsNumber(fan_num) &&
-          cJSON_IsNumber(state) &&
-          cJSON_IsNumber(fan_on_time) &&
-          cJSON_IsNumber(hour) &&
-          cJSON_IsNumber(minute)) {
-        printf("Creating cron spec\n");
-        cron_spec.fan_num = fan_num->valueint;
-        cron_spec.state = state->valueint;
-        cron_spec.fan_on_time = fan_on_time->valueint;
-        cron_spec.hour = hour->valueint;
-        cron_spec.minute = minute->valueint;
-        cron_spec.last_ran_day = -1;
-        cron_spec.last_ran_hour = -1;
-        cron_spec.last_ran_minute = -1;
-        printf("Parsed: hour = %d, minute = %d\n", cron_spec.hour, cron_spec.minute);
-      }
-    }
-    return cron_spec;
-}
-
 static TickType_t
 make_delay(int seconds) {
   return (1000*seconds) / portTICK_PERIOD_MS;
@@ -242,15 +154,11 @@ make_delay(int seconds) {
 const TickType_t fan_TIMER_DELAY = (1000*60) / portTICK_PERIOD_MS;
 const TickType_t fan_CB_PERIOD = (1000*10) / portTICK_PERIOD_MS;
 
-TimerHandle_t fanTimer = 0; // Timer for toggling the fans on/off
-StaticTimer_t fanTimerBuffer; // Memory backing for the timer, allocated statically
-
 // Queue type definitions
 uint8_t queueStorage[FAN_EV_NUM*sizeof (struct event_t)]; // byte array for queue memory
 static StaticQueue_t fanEvents;
 QueueHandle_t fanEventsHandle;
 
-uint8_t timerQueueStorage[FAN_EV_NUM*sizeof (struct cron_t)]; // byte array for queue memory
 static StaticQueue_t timerEvents;
 QueueHandle_t timerEventsHandle;
 
@@ -305,54 +213,6 @@ runfans(int delay2) {
   xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
 }
 
-void
-fanTimerCb(TimerHandle_t fanTimer) {
-  time_t now;
-  struct tm timeinfo;
-  time(&now);
-  localtime_r(&now, &timeinfo);
-  struct cron_t fan_timer_config;
-  static int next_cron_spec = 0;
-
-  if (timerEventsHandle != NULL) {
-    if (xQueueReceive(timerEventsHandle, &fan_timer_config, (TickType_t)0) == pdPASS) {
-      printf("Got a new cron spec\n");
-      cron_specs[next_cron_spec] = fan_timer_config;
-      next_cron_spec = (next_cron_spec + 1) % MAX_CRON_SPECS;
-      printf("new: hour = %d, minute = %d\n", fan_timer_config.hour, fan_timer_config.minute);
-    }
-  }
-
-  // check current number of cron specs, remove oldest one and replace if none left
-  // loop over them and check time and execute commands
-  for (int i = 0; i < MAX_CRON_SPECS; i++) {
-    //printf("to match: hour = %d, minute = %d\n", cron_specs[i].hour, cron_specs[i].minute);
-    //printf("current: hour = %d, minute = %d\n", timeinfo.tm_hour, timeinfo.tm_min);
-    if (timeinfo.tm_hour == cron_specs[i].hour && (timeinfo.tm_min == cron_specs[i].minute)) {
-      if (cron_specs[i].last_ran_day == timeinfo.tm_mday) {
-        // it already ran today, skip it
-        continue;
-      }
-      printf("running, hour = %d, minute = %d\n", cron_specs[i].hour, cron_specs[i].minute);
-      struct event_t message = {0};
-      switch (cron_specs[i].fan_num) {
-        case 0:
-          message.fan = FAN_OFF;
-          break;
-        case 1:
-          message.fan = FAN_ON;
-          break;
-      }
-      message.fan_delay = make_delay(cron_specs[i].fan_on_time);
-      xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
-
-      cron_specs[i].last_ran_day = timeinfo.tm_mday;
-      cron_specs[i].last_ran_hour = timeinfo.tm_hour;
-      cron_specs[i].last_ran_minute = timeinfo.tm_min;
-    }
-  }
-}
-
 esp_err_t
 get_sensor_data_handler(httpd_req_t *req) {
     time_t now;
@@ -367,20 +227,32 @@ get_sensor_data_handler(httpd_req_t *req) {
 
     cJSON *resp_object_j = cJSON_CreateObject();
 
-    uint16_t voc_index;
+    int32_t voc_index;
+    uint16_t raw_voc;
 
     if (sht3x_measure(sensor, &temperature, &humidity)) {
       cJSON_AddNumberToObject(resp_object_j, "temperature", (double)temperature);
       cJSON_AddNumberToObject(resp_object_j, "humidity", (double)humidity);
 
-      esp_err_t sgp40_status = sgp40_measure_raw(&air_q_sensor,
+      esp_err_t sgp40_status = sgp40_measure_voc(&air_q_sensor,
                                                  humidity,
                                                  temperature,
                                                  &voc_index);
 
+      esp_err_t sgp40_status_raw = sgp40_measure_raw(&air_q_sensor,
+                                                     humidity,
+                                                     temperature,
+                                                     &raw_voc);
+
+
       if (sgp40_status == ESP_OK) {
-        cJSON_AddNumberToObject(resp_object_j, "voc_index", (double)voc_index);
+        cJSON_AddNumberToObject(resp_object_j, "voc_index", voc_index);
       }
+
+      if (sgp40_status_raw == ESP_OK) {
+        cJSON_AddNumberToObject(resp_object_j, "raw_voc", raw_voc);
+      }
+
     }
 
     cJSON_AddNumberToObject(resp_object_j, "hour", (double)timeinfo.tm_hour);
@@ -453,155 +325,6 @@ httpd_uri_t fans_on = {
     .user_ctx = NULL
 };
 
-esp_err_t
-add_cron_handler(httpd_req_t *req) {
-  printf("add_cron_handler executed\n");
-  // TODO stream
-  char req_body[HTTPD_RESP_SIZE+1] = {0};
-  char resp[HTTPD_RESP_SIZE] = {0};
-
-  size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
-
-  // Receive body and do error handling
-  int ret = httpd_req_recv(req, req_body, body_size);
-
-  // if ret == 0 then no data
-  if (ret < 0) {
-    if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-      httpd_resp_send_408(req);
-    }
-    return ESP_FAIL;
-  }
-
-  cJSON *json = cJSON_ParseWithLength(req_body, HTTPD_RESP_SIZE);
-
-  struct cron_t cron_spec = {0};
-
-  if (json != NULL) {
-    //printf("%s\n", cJSON_Print(json));
-    cron_spec = parse_cron_data(json);
-    xQueueSend(timerEventsHandle, (void*)&cron_spec, (TickType_t)0);
-  }
-
-  httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-
-  if (json != NULL) { cJSON_Delete(json); }
-  return ESP_OK;
-}
-
-/* URI handler structure for POST /add_cron */
-httpd_uri_t add_cron = {
-    .uri      = "/add_cron",
-    .method   = HTTP_POST,
-    .handler  = add_cron_handler,
-    .user_ctx = NULL
-};
-
-esp_err_t
-clear_cron_handler(httpd_req_t *req) {
-  printf("clear_cron handler executed\n");
-  // TODO stream
-  char req_body[HTTPD_RESP_SIZE+1] = {0};
-  char resp[HTTPD_RESP_SIZE*10] = {0};
-
-  size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
-
-  // Receive body and do error handling
-  int ret = httpd_req_recv(req, req_body, body_size);
-
-  // if ret == 0 then no data
-  if (ret < 0) {
-    if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-      httpd_resp_send_408(req);
-    }
-    return ESP_FAIL;
-  }
-
-  int num_toks = 0;
-  int uri_size = strlen(req->uri) + 1;
-  char *uri = calloc(uri_size, 1);
-
-  if (uri != NULL) {
-    memcpy(uri, req->uri, uri_size);
-  }
-  else {
-    return ESP_FAIL;
-  }
-
-  char *token = strtok(uri, "/");
-  long cron_index = -1;
-
-  while (token != NULL) {
-    num_toks++;
-    if (num_toks == 2 && token != NULL) {
-      char *endptr;
-      errno = 0;
-      long parsed_cron_index = strtol(token, &endptr, 10);
-      if (endptr == token) { // nothing was parsed successfully because the pointer didn't move forward
-        continue;
-      }
-      if ((parsed_cron_index == LONG_MAX || parsed_cron_index == LONG_MIN) && errno == ERANGE) {
-        continue;
-      }
-      cron_index = parsed_cron_index;
-    }
-    token = strtok(NULL, uri);
-  }
-
-  if (cron_index == -1) {
-    clear_cron_specs();
-  }
-  if (cron_index >= 0 && cron_index < MAX_CRON_SPECS) {
-    clear_cron_spec(cron_index);
-  }
-
-  if (uri != NULL) { free(uri); }
-
-  cJSON *cron_specs_j = serialize_cron_specs(cron_specs);
-  cJSON_PrintPreallocated(cron_specs_j, resp, HTTPD_RESP_SIZE*10, false);
-  httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-
-  if (cron_specs_j != NULL) { cJSON_Delete(cron_specs_j); }
-  return ESP_OK;
-}
-
-/* URI handler structure for POST /add_cron */
-httpd_uri_t clear_cron = {
-    .uri      = "/clear_cron/?*",
-    .method   = HTTP_DELETE,
-    .handler  = clear_cron_handler,
-    .user_ctx = NULL
-};
-
-esp_err_t
-get_cron_data_handler(httpd_req_t *req) {
-    char resp[HTTPD_RESP_SIZE*10] = {0};
-
-    cJSON *resp_object_j = cJSON_CreateObject();
-
-    if (resp_object_j != NULL) { cJSON_Delete(resp_object_j); }
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_status(req, HTTPD_200);
-
-    cJSON *cron_specs_j = serialize_cron_specs(cron_specs);
-
-    cJSON_PrintPreallocated(cron_specs_j, resp, HTTPD_RESP_SIZE*10, false);
-
-    if (cron_specs_j != NULL) { cJSON_Delete(cron_specs_j); }
-
-    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-
-    return ESP_OK;
-}
-
-httpd_uri_t get_cron_data = {
-    .uri      = "/cron_data",
-    .method   = HTTP_GET,
-    .handler  = get_cron_data_handler,
-    .user_ctx = NULL
-};
-
 /* Function for starting the webserver */
 httpd_handle_t
 start_webserver(void) {
@@ -617,9 +340,6 @@ start_webserver(void) {
         /* Register URI handlers */
         httpd_register_uri_handler(server, &get_sensor_data);
         httpd_register_uri_handler(server, &fans_on);
-        httpd_register_uri_handler(server, &add_cron);
-        httpd_register_uri_handler(server, &clear_cron);
-        httpd_register_uri_handler(server, &get_cron_data);
     }
     /* If server failed to start, handle will be NULL */
     ESP_LOGI(TAG, "webserver started");
@@ -891,13 +611,9 @@ app_main(void) {
         }
     }
     fanEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct event_t), queueStorage, &fanEvents);
-    timerEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct cron_t), timerQueueStorage, &timerEvents);
 
     configASSERT(fanEventsHandle);
     configASSERT(timerEventsHandle);
-
-    fanTimer = xTimerCreateStatic("fan timer", fan_CB_PERIOD, pdTRUE, (void*)0, fanTimerCb, &fanTimerBuffer);
-    xTimerStart(fanTimer, 0);
 
     // fan stuff
     // Set the LEDC peripheral configuration
