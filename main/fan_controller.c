@@ -668,7 +668,6 @@ app_main(void) {
     configASSERT(fanEventsHandle);
 
     i2c_init(I2C_BUS, I2C_SCL_PIN, I2C_SDA_PIN, I2C_FREQ_100K);
-    //i2c_init(I2C_BUS_2, AC_SCL, AC_SDA, I2C_FREQ_100K);
 
     // Create the sensors, multiple sensors are possible.
     sensor = sht3x_init_sensor(I2C_BUS, SHT3x_ADDR_1);
