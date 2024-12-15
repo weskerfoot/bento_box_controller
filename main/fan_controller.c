@@ -676,33 +676,3 @@ app_main(void) {
 
     createfanRunnerTask();
 }
-
-/*
-void
-app_main(void) {
-  ledc_init(LEDC_OUTPUT_IO, LEDC_CHANNEL, LEDC_TIMER);
-  while (1) {
-    fan_on();
-    vTaskDelay(1000 / portTICK_PERIOD_MS); // 1 second delay
-  }
-}
-*/
-
-/*
-#define GPIO_PIN 19
-
-void app_main(void)
-{
-    // Set GPIO as output
-    gpio_set_direction(GPIO_PIN, GPIO_MODE_OUTPUT);
-    printf("yolo\n");
-
-    while (1) {
-        // Toggle GPIO pin
-        gpio_set_level(GPIO_PIN, 1);
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // 1 second delay
-        gpio_set_level(GPIO_PIN, 0);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-    }
-}
-*/
