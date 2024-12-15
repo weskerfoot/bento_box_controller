@@ -38,6 +38,7 @@
 #include <sys/time.h>
 #include <time.h>
 #include <sgp40.h>
+#include "driver/gpio.h"
 #include "sdkconfig.h"
 
 #define WIFI_SSID CONFIG_ESP_WIFI_SSID
@@ -46,15 +47,13 @@
 #define BROKER_URI CONFIG_BROKER_URI
 #define SERIAL_NUMBER CONFIG_SERIAL
 
-#define LEDC_TIMER_0  0
-#define LEDC_TIMER_1 1
+#define LEDC_TIMER 1
 #define LEDC_MODE LEDC_LOW_SPEED_MODE
-#define LEDC_OUTPUT_IO_1  (18) // Define the output GPIO
-#define LEDC_OUTPUT_IO_2  (19) // Define the output GPIO
-#define LEDC_CHANNEL_2  1
-#define LEDC_DUTY_RES LEDC_TIMER_8_BIT // Set duty resolution to 13 bits
+#define LEDC_OUTPUT_IO (19) // Define the output GPIO
+#define LEDC_CHANNEL 1
+#define LEDC_DUTY_RES LEDC_TIMER_8_BIT // Set duty resolution to 8 bits
 #define LEDC_DUTY (255) // Set duty cycle, ((2 ** n_bits) - 1) * percentage = duty cycle
-#define LEDC_FREQUENCY (10000) // Frequency in Hertz. Set frequency at 10 kHz
+#define LEDC_FREQUENCY (1000) // Frequency in Hertz. Set frequency at 10 kHz
 
 #define I2C_BUS       0
 #define I2C_SCL_PIN   22
@@ -187,5 +186,22 @@ unsigned char bbl_ca_pem[] = {
 };
 unsigned int bbl_ca_pem_len = 1238;
 
-
 void runfans(int);
+
+typedef enum {
+  FAN_ON = 1,
+  FAN_OFF = 2,
+  FAN_ON_MANUAL = 3,
+  FAN_OFF_MANUAL = 4
+} event_type;
+
+struct event_t {
+  event_type fan;
+  int fan_delay;
+  int run_forever;
+  int manual;
+};
+
+void run_fans_forever();
+void run_fans(int, int);
+void stop_running_fans(int);

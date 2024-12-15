@@ -15,25 +15,13 @@ static void set_fan(int fan_num, int state) {
 
 static void
 fan_on() {
-  set_fan(0, 0);
   set_fan(1, 1);
 }
 
 static void
 fans_off() {
-  set_fan(0, 0);
   set_fan(1, 0);
 }
-
-typedef enum {
-  FAN_ON = 1,
-  FAN_OFF = 2,
-} event_type;
-
-struct event_t {
-  event_type fan;
-  int fan_delay;
-};
 
 void
 initSGP40() {
@@ -53,6 +41,9 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
   int msg_id;
   cJSON *mqtt_data;
   char *json_st;
+
+  // This might be inefficient
+  static double bed_temper = 0.0;
 
   // whether the printer is currently running or not
   static int printer_state = 0;
@@ -96,13 +87,39 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
           cJSON *print_object = cJSON_GetObjectItemCaseSensitive(mqtt_data, "print");
           if (cJSON_IsObject(print_object)) {
             printf("got print object\n");
-            cJSON *gcode_state = cJSON_GetObjectItemCaseSensitive(print_object, "gcode_state");
-            if (cJSON_IsString(gcode_state) && gcode_state->valuestring != NULL) {
-              printf("got gcode_state\n");
-              if (strncmp(gcode_state->valuestring, "RUNNING", strlen(gcode_state->valuestring))) {
-                runfans(10);
+
+            cJSON *gcode_state_val = cJSON_GetObjectItemCaseSensitive(print_object, "gcode_state");
+            cJSON *bed_temper_val = cJSON_GetObjectItemCaseSensitive(print_object, "bed_temper");
+
+            if (cJSON_IsString(gcode_state_val) && gcode_state_val->valuestring != NULL) {
+              int gcode_str_len = strlen(gcode_state_val->valuestring);
+
+              if (strncmp(gcode_state_val->valuestring, "RUNNING", gcode_str_len) &&
+                  bed_temper > 83.0) {
+                printf("Starting air filter fans\n");
+                run_fans_forever();
+              }
+
+              if (strncmp(gcode_state_val->valuestring, "FINISH", gcode_str_len)) {
+                printf("Stopping air filter fans\n");
               }
             }
+
+            if (cJSON_IsNumber(bed_temper_val) && bed_temper_val->valuedouble != 0) {
+              bed_temper = bed_temper_val->valuedouble;
+            }
+
+            // TODO make this communicate with another task using a queue and then run that periodically
+            // instead of relying on receving an MQTT event
+            // also make the temperatures configurable via the api and the kconfig
+            if (bed_temper > 83.0) {
+              run_fans_forever();
+            }
+
+            if (bed_temper < 83.0) {
+              stop_running_fans(1);
+            }
+
           }
           cJSON_Delete(mqtt_data);
         }
@@ -125,7 +142,6 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
       ESP_LOGI(TAG, "Other event id:%d", event->event_id);
       break;
   }
-
 }
 
 static void
@@ -159,9 +175,6 @@ uint8_t queueStorage[FAN_EV_NUM*sizeof (struct event_t)]; // byte array for queu
 static StaticQueue_t fanEvents;
 QueueHandle_t fanEventsHandle;
 
-static StaticQueue_t timerEvents;
-QueueHandle_t timerEventsHandle;
-
 // Task type definitions
 
 StaticTask_t xTaskBuffer;
@@ -170,23 +183,41 @@ StackType_t xStack[TASK_STACK_SIZE];
 void
 fanRunnerTaskFunction(void *params) {
   struct event_t fanMessage;
+  int is_turned_on_manually = 0;
 
   printf("Task started\n");
 
   configASSERT( ( uint32_t ) params == 1UL );
 
   while (1) {
-    vTaskDelay(2000 / portTICK_PERIOD_MS);
-
     if (fanEventsHandle != NULL) {
       // The queue exists and is created
       if (xQueueReceive(fanEventsHandle, &fanMessage, (TickType_t)fan_TIMER_DELAY) == pdPASS) {
-        printf("got a message, fan = %u, FAN_ON = %u, FAN_OFF = %u\n", fanMessage.fan, FAN_ON, FAN_OFF);
         if (fanMessage.fan == FAN_ON) {
           fan_on();
         }
-        vTaskDelay(fanMessage.fan_delay);
-        fans_off();
+
+        if (fanMessage.fan == FAN_ON_MANUAL) {
+          is_turned_on_manually = 1;
+          fan_on();
+
+          // If it should run on a delay, then delay and turn them off
+          if (fanMessage.run_forever != 1) {
+            vTaskDelay(fanMessage.fan_delay);
+            fans_off();
+          }
+
+        }
+
+        if (fanMessage.fan == FAN_OFF && !is_turned_on_manually) {
+          fans_off();
+        }
+
+        if (fanMessage.fan == FAN_OFF_MANUAL) {
+          fans_off();
+          is_turned_on_manually = 0;
+        }
+
       }
     }
   }
@@ -203,12 +234,29 @@ createfanRunnerTask(void) {
                      &xTaskBuffer);
 }
 
+void
+run_fans(int delay, int manual) {
+  struct event_t message;
+  message.fan = manual == 0 ? FAN_ON : FAN_ON_MANUAL;
+  message.fan_delay = make_delay(delay);
+  message.run_forever = 0;
+
+  xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
+}
 
 void
-runfans(int delay2) {
+stop_running_fans(int manual) {
+  struct event_t message;
+  message.fan = manual == 0 ? FAN_OFF : FAN_OFF_MANUAL;
+  xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
+}
+
+void
+run_fans_forever() {
   struct event_t message;
   message.fan = FAN_ON;
-  message.fan_delay = make_delay(delay2);
+  message.fan_delay = -1;
+  message.run_forever = 1;
 
   xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
 }
@@ -274,7 +322,7 @@ fans_on_handler(httpd_req_t *req) {
   printf("fans_on_handler executed\n");
   // TODO stream
   char req_body[HTTPD_RESP_SIZE+1] = {0};
-  char resp[HTTPD_RESP_SIZE] = {0};
+  char resp[HTTPD_RESP_SIZE] = {1};
 
   size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
 
@@ -298,7 +346,7 @@ fans_on_handler(httpd_req_t *req) {
       fan_time_j = cJSON_GetObjectItemCaseSensitive(json, "fan");
       if (cJSON_IsNumber(fan_time_j)) {
         printf("Running fans: time = %d\n", fan_time_j->valueint);
-        runfans(fan_time_j->valueint);
+        run_fans(fan_time_j->valueint, 1);
       }
     }
   }
@@ -507,7 +555,7 @@ wifi_init_sta(void) {
             /* Setting a password implies station will connect to all security modes including WEP/WPA.
              * However these modes are deprecated and not advisable to be used. Incase your Access point
              * doesn't support WPA2, these mode can be enabled by commenting below line */
-	     .threshold.authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD,
+	          .threshold.authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD,
         },
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
@@ -527,6 +575,7 @@ wifi_init_sta(void) {
     /* xEventGroupWaitBits() returns the bits before the call returned, hence we can test which event actually
      * happened. */
     if (bits & WIFI_CONNECTED_BIT) {
+        esp_wifi_set_ps(WIFI_PS_NONE);
         ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
                  WIFI_SSID, WIFI_PASS);
 
@@ -577,6 +626,10 @@ app_main(void) {
     ++boot_count;
     ESP_LOGI(TAG, "Boot count: %d", boot_count);
 
+    // fan stuff
+    // Set the LEDC peripheral configuration
+    ledc_init(LEDC_OUTPUT_IO, LEDC_CHANNEL, LEDC_TIMER);
+
     time_t now;
     struct tm timeinfo;
     time(&now);
@@ -613,11 +666,6 @@ app_main(void) {
     fanEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct event_t), queueStorage, &fanEvents);
 
     configASSERT(fanEventsHandle);
-    configASSERT(timerEventsHandle);
-
-    // fan stuff
-    // Set the LEDC peripheral configuration
-    ledc_init(LEDC_OUTPUT_IO_2, 1, 1);
 
     i2c_init(I2C_BUS, I2C_SCL_PIN, I2C_SDA_PIN, I2C_FREQ_100K);
     //i2c_init(I2C_BUS_2, AC_SCL, AC_SDA, I2C_FREQ_100K);
@@ -628,3 +676,33 @@ app_main(void) {
 
     createfanRunnerTask();
 }
+
+/*
+void
+app_main(void) {
+  ledc_init(LEDC_OUTPUT_IO, LEDC_CHANNEL, LEDC_TIMER);
+  while (1) {
+    fan_on();
+    vTaskDelay(1000 / portTICK_PERIOD_MS); // 1 second delay
+  }
+}
+*/
+
+/*
+#define GPIO_PIN 19
+
+void app_main(void)
+{
+    // Set GPIO as output
+    gpio_set_direction(GPIO_PIN, GPIO_MODE_OUTPUT);
+    printf("yolo\n");
+
+    while (1) {
+        // Toggle GPIO pin
+        gpio_set_level(GPIO_PIN, 1);
+        vTaskDelay(1000 / portTICK_PERIOD_MS); // 1 second delay
+        gpio_set_level(GPIO_PIN, 0);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+}
+*/
