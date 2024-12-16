@@ -97,7 +97,7 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
               if (strncmp(gcode_state_val->valuestring, "RUNNING", gcode_str_len) &&
                   bed_temper > 83.0) {
                 printf("Starting air filter fans\n");
-                run_fans_forever();
+                run_fans_forever(BED_TEMP_PRIORITY);
               }
 
               if (strncmp(gcode_state_val->valuestring, "FINISH", gcode_str_len)) {
@@ -109,15 +109,12 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
               bed_temper = bed_temper_val->valuedouble;
             }
 
-            // TODO make this communicate with another task using a queue and then run that periodically
-            // instead of relying on receving an MQTT event
-            // also make the temperatures configurable via the api and the kconfig
             if (bed_temper > 83.0) {
-              run_fans_forever();
+              run_fans_forever(BED_TEMP_PRIORITY);
             }
 
             if (bed_temper < 83.0) {
-              stop_running_fans(1);
+              stop_running_fans(BED_TEMP_PRIORITY);
             }
 
           }
@@ -187,21 +184,15 @@ SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
 
 void
 sensorManagerTaskFunction(void *params) {
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
-
-    float temperature;
-    float humidity;
-    int32_t voc_index;
-    uint16_t raw_voc;
-
-
   while (1) {
     vTaskDelay(make_delay(10));
     if (sensorSemaphore != NULL) {
       if (xSemaphoreTake(sensorSemaphore, (TickType_t)10) == pdTRUE) {
+
+        float temperature = 0.0;
+        float humidity = 0.0;
+        int32_t voc_index = 0;
+        uint16_t raw_voc = 0;
 
         if (sht3x_measure(sensor, &temperature, &humidity)) {
           printf("temperature = %f\n", (double)temperature);
@@ -219,6 +210,12 @@ sensorManagerTaskFunction(void *params) {
 
           if (sgp40_status == ESP_OK) {
             printf("voc_index = %ld\n", voc_index);
+            if (voc_index > 105) { // TODO, make threshold configurable, test with ABS, etc
+              run_fans_forever(SENSOR_PRIORITY);
+            }
+            if (voc_index <= 100) {
+              stop_running_fans(SENSOR_PRIORITY);
+            }
           }
 
           if (sgp40_status_raw == ESP_OK) {
@@ -239,7 +236,7 @@ sensorManagerTaskFunction(void *params) {
 void
 fanRunnerTaskFunction(void *params) {
   struct event_t fanMessage;
-  int is_turned_on_manually = 0;
+  int current_priority = LOWEST_PRIORITY;
 
   printf("Task started\n");
 
@@ -249,31 +246,22 @@ fanRunnerTaskFunction(void *params) {
     if (fanEventsHandle != NULL) {
       // The queue exists and is created
       if (xQueueReceive(fanEventsHandle, &fanMessage, (TickType_t)fan_TIMER_DELAY) == pdPASS) {
-        if (fanMessage.fan == FAN_ON) {
-          fan_on();
-        }
-
-        if (fanMessage.fan == FAN_ON_MANUAL) {
-          is_turned_on_manually = 1;
+        if (fanMessage.fan == FAN_ON && fanMessage.priority <= current_priority) {
+          current_priority = fanMessage.priority;
           fan_on();
 
           // If it should run on a delay, then delay and turn them off
           if (fanMessage.run_forever != 1) {
             vTaskDelay(fanMessage.fan_delay);
+            current_priority = LOWEST_PRIORITY;
             fans_off();
           }
-
         }
 
-        if (fanMessage.fan == FAN_OFF && !is_turned_on_manually) {
+        if (fanMessage.fan == FAN_OFF && fanMessage.priority <= current_priority) {
           fans_off();
+          current_priority = LOWEST_PRIORITY;
         }
-
-        if (fanMessage.fan == FAN_OFF_MANUAL) {
-          fans_off();
-          is_turned_on_manually = 0;
-        }
-
       }
     }
   }
@@ -301,9 +289,10 @@ createfanRunnerTask(void) {
 }
 
 void
-run_fans(int delay, int manual) {
+run_fans(int delay, int priority) {
   struct event_t message;
-  message.fan = manual == 0 ? FAN_ON : FAN_ON_MANUAL;
+  message.fan = FAN_ON;
+  message.priority = priority;
   message.fan_delay = make_delay(delay);
   message.run_forever = 0;
 
@@ -311,18 +300,20 @@ run_fans(int delay, int manual) {
 }
 
 void
-stop_running_fans(int manual) {
+stop_running_fans(int priority) {
   struct event_t message;
-  message.fan = manual == 0 ? FAN_OFF : FAN_OFF_MANUAL;
+  message.fan = FAN_OFF;
+  message.priority = priority;
   xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
 }
 
 void
-run_fans_forever() {
+run_fans_forever(int priority) {
   struct event_t message;
   message.fan = FAN_ON;
   message.fan_delay = -1;
   message.run_forever = 1;
+  message.priority = priority;
 
   xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
 }
@@ -418,7 +409,7 @@ fans_on_handler(httpd_req_t *req) {
       fan_time_j = cJSON_GetObjectItemCaseSensitive(json, "fan");
       if (cJSON_IsNumber(fan_time_j)) {
         printf("Running fans: time = %d\n", fan_time_j->valueint);
-        run_fans(fan_time_j->valueint, 1);
+        run_fans(fan_time_j->valueint, MANUAL_PRIORITY);
       }
     }
   }

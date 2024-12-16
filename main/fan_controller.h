@@ -186,20 +186,25 @@ unsigned char bbl_ca_pem[] = {
 };
 unsigned int bbl_ca_pem_len = 1238;
 
+typedef enum {
+  MANUAL_PRIORITY = 1,
+  SENSOR_PRIORITY = 2,
+  BED_TEMP_PRIORITY = 3,
+  LOWEST_PRIORITY = 4
+} control_priority;
+
 void runfans(int);
 
 typedef enum {
   FAN_ON = 1,
   FAN_OFF = 2,
-  FAN_ON_MANUAL = 3,
-  FAN_OFF_MANUAL = 4
 } event_type;
 
 struct event_t {
   event_type fan;
   int fan_delay;
   int run_forever;
-  int manual;
+  int priority;
 };
 
 void run_fans_forever();
