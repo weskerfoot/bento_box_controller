@@ -177,8 +177,29 @@ QueueHandle_t fanEventsHandle;
 
 // Task type definitions
 
-StaticTask_t xTaskBuffer;
-StackType_t xStack[TASK_STACK_SIZE];
+StaticTask_t fanRunnerTaskBuffer;
+StackType_t fanRunnerTaskStack[TASK_STACK_SIZE];
+
+StaticTask_t sensorManagerTaskBuffer;
+StackType_t sensorManagerTaskStack[TASK_STACK_SIZE];
+
+SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
+
+void
+sensorManagerTaskFunction(void *params) {
+  while (1) {
+    vTaskDelay(make_delay(10));
+    if (sensorSemaphore != NULL) {
+      if (xSemaphoreTake(sensorSemaphore, (TickType_t)10) == pdTRUE) {
+        printf("would get some sensor data and send fan messages now\n");
+        xSemaphoreGive(sensorSemaphore);
+      }
+      else {
+        printf("failed to acquire sensor semaphore in manager task\n");
+      }
+    }
+  }
+}
 
 void
 fanRunnerTaskFunction(void *params) {
@@ -224,14 +245,24 @@ fanRunnerTaskFunction(void *params) {
 }
 
 static void
+createSensorManagerTask(void) {
+  xTaskCreateStatic(sensorManagerTaskFunction,
+                    "sensormant",
+                     TASK_STACK_SIZE,
+                     (void*)1,
+                     tskIDLE_PRIORITY + 2,
+                     sensorManagerTaskStack,
+                     &sensorManagerTaskBuffer);
+}
+static void
 createfanRunnerTask(void) {
   xTaskCreateStatic(fanRunnerTaskFunction,
                     "fant",
                      TASK_STACK_SIZE,
                      (void*)1,
                      tskIDLE_PRIORITY + 2,
-                     xStack,
-                     &xTaskBuffer);
+                     fanRunnerTaskStack,
+                     &fanRunnerTaskBuffer);
 }
 
 void
@@ -270,51 +301,57 @@ get_sensor_data_handler(httpd_req_t *req) {
 
     float temperature;
     float humidity;
+    int32_t voc_index;
+    uint16_t raw_voc;
 
     char resp[HTTPD_RESP_SIZE] = {0};
 
     cJSON *resp_object_j = cJSON_CreateObject();
 
-    int32_t voc_index;
-    uint16_t raw_voc;
+    if (xSemaphoreTake(sensorSemaphore, (TickType_t)10) == pdTRUE) {
+      if (sht3x_measure(sensor, &temperature, &humidity)) {
+        cJSON_AddNumberToObject(resp_object_j, "temperature", (double)temperature);
+        cJSON_AddNumberToObject(resp_object_j, "humidity", (double)humidity);
 
-    if (sht3x_measure(sensor, &temperature, &humidity)) {
-      cJSON_AddNumberToObject(resp_object_j, "temperature", (double)temperature);
-      cJSON_AddNumberToObject(resp_object_j, "humidity", (double)humidity);
+        esp_err_t sgp40_status = sgp40_measure_voc(&air_q_sensor,
+                                                   humidity,
+                                                   temperature,
+                                                   &voc_index);
 
-      esp_err_t sgp40_status = sgp40_measure_voc(&air_q_sensor,
-                                                 humidity,
-                                                 temperature,
-                                                 &voc_index);
-
-      esp_err_t sgp40_status_raw = sgp40_measure_raw(&air_q_sensor,
-                                                     humidity,
-                                                     temperature,
-                                                     &raw_voc);
+        esp_err_t sgp40_status_raw = sgp40_measure_raw(&air_q_sensor,
+                                                       humidity,
+                                                       temperature,
+                                                       &raw_voc);
 
 
-      if (sgp40_status == ESP_OK) {
-        cJSON_AddNumberToObject(resp_object_j, "voc_index", voc_index);
+        if (sgp40_status == ESP_OK) {
+          cJSON_AddNumberToObject(resp_object_j, "voc_index", voc_index);
+        }
+
+        if (sgp40_status_raw == ESP_OK) {
+          cJSON_AddNumberToObject(resp_object_j, "raw_voc", raw_voc);
+        }
+
       }
 
-      if (sgp40_status_raw == ESP_OK) {
-        cJSON_AddNumberToObject(resp_object_j, "raw_voc", raw_voc);
-      }
+      cJSON_AddNumberToObject(resp_object_j, "hour", (double)timeinfo.tm_hour);
+      cJSON_AddNumberToObject(resp_object_j, "minute", (double)timeinfo.tm_min);
 
+      cJSON_PrintPreallocated(resp_object_j, resp, HTTPD_RESP_SIZE, false);
+
+      if (resp_object_j != NULL) { cJSON_Delete(resp_object_j); }
+
+      httpd_resp_set_type(req, "application/json");
+      httpd_resp_set_status(req, HTTPD_200);
+      httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+
+      xSemaphoreGive(sensorSemaphore);
+      return ESP_OK;
     }
-
-    cJSON_AddNumberToObject(resp_object_j, "hour", (double)timeinfo.tm_hour);
-    cJSON_AddNumberToObject(resp_object_j, "minute", (double)timeinfo.tm_min);
-
-    cJSON_PrintPreallocated(resp_object_j, resp, HTTPD_RESP_SIZE, false);
-
-    if (resp_object_j != NULL) { cJSON_Delete(resp_object_j); }
-
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_set_status(req, HTTPD_200);
-    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-
-    return ESP_OK;
+    else {
+      printf("failed to acquire sensor semaphore in web request\n");
+      return ESP_FAIL;
+    }
 }
 
 esp_err_t
@@ -393,12 +430,6 @@ start_webserver(void) {
     ESP_LOGI(TAG, "webserver started");
     return server;
 }
-
-static SemaphoreHandle_t s_semph_get_ip_addrs;
-
-#ifndef INET6_ADDRSTRLEN
-#define INET6_ADDRSTRLEN 48
-#endif
 
 /* Variable holding number of times ESP32 restarted since first boot.
  * It is placed into RTC memory using RTC_DATA_ATTR and
@@ -630,6 +661,9 @@ app_main(void) {
     // Set the LEDC peripheral configuration
     ledc_init(LEDC_OUTPUT_IO, LEDC_CHANNEL, LEDC_TIMER);
 
+    sensorSemaphore = xSemaphoreCreateBinary();
+    xSemaphoreGive(sensorSemaphore);
+
     time_t now;
     struct tm timeinfo;
     time(&now);
@@ -674,4 +708,5 @@ app_main(void) {
     initSGP40();
 
     createfanRunnerTask();
+    createSensorManagerTask();
 }
