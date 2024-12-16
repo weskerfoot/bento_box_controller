@@ -187,11 +187,46 @@ SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
 
 void
 sensorManagerTaskFunction(void *params) {
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+
+    float temperature;
+    float humidity;
+    int32_t voc_index;
+    uint16_t raw_voc;
+
+
   while (1) {
     vTaskDelay(make_delay(10));
     if (sensorSemaphore != NULL) {
       if (xSemaphoreTake(sensorSemaphore, (TickType_t)10) == pdTRUE) {
-        printf("would get some sensor data and send fan messages now\n");
+
+        if (sht3x_measure(sensor, &temperature, &humidity)) {
+          printf("temperature = %f\n", (double)temperature);
+          printf("humidity = %f\n", (double)humidity);
+
+          esp_err_t sgp40_status = sgp40_measure_voc(&air_q_sensor,
+                                                     humidity,
+                                                     temperature,
+                                                     &voc_index);
+
+          esp_err_t sgp40_status_raw = sgp40_measure_raw(&air_q_sensor,
+                                                         humidity,
+                                                         temperature,
+                                                         &raw_voc);
+
+          if (sgp40_status == ESP_OK) {
+            printf("voc_index = %ld\n", voc_index);
+          }
+
+          if (sgp40_status_raw == ESP_OK) {
+            printf("raw_voc = %d\n", raw_voc);
+          }
+
+        }
+
         xSemaphoreGive(sensorSemaphore);
       }
       else {
