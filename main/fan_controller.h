@@ -216,6 +216,10 @@ struct threshold_event {
   double bed_temper_min_threshold;
 };
 
+struct printer_event {
+  double bed_temper;
+};
+
 void run_fans_forever();
 void run_fans(int, int);
 void stop_running_fans(int);

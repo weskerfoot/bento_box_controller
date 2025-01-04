@@ -6,6 +6,35 @@ static const char *TAG = "fan_controller";
 static sht3x_sensor_t* sensor;
 static sgp40_t air_q_sensor;
 
+// Timer type definitions
+const TickType_t fan_TIMER_DELAY = (1000*60) / portTICK_PERIOD_MS;
+const TickType_t sensor_TIMER_DELAY = 1000 / portTICK_PERIOD_MS;
+const TickType_t fan_CB_PERIOD = (1000*10) / portTICK_PERIOD_MS;
+
+// Queue type definitions
+uint8_t fanQueueStorage[FAN_EV_NUM*sizeof (struct fan_event)]; // byte array for queue memory
+static StaticQueue_t fanEvents;
+QueueHandle_t fanEventsHandle;
+
+uint8_t thresholdQueueStorage[1*sizeof (struct fan_event)]; // byte array for queue memory
+static StaticQueue_t thresholdEvents;
+QueueHandle_t thresholdEventsHandle;
+
+uint8_t printerEventsQueueStorage[10*sizeof (struct fan_event)]; // byte array for queue memory
+static StaticQueue_t printerEvents;
+QueueHandle_t printerEventsHandle;
+
+// Task type definitions
+
+StaticTask_t fanRunnerTaskBuffer;
+StackType_t fanRunnerTaskStack[TASK_STACK_SIZE];
+
+StaticTask_t sensorManagerTaskBuffer;
+StackType_t sensorManagerTaskStack[TASK_STACK_SIZE];
+
+SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
+
+
 static void set_fan(int fan_num, int state) {
     // Set duty to 100%
     ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, fan_num, state == 1 ? LEDC_DUTY: 0));
@@ -94,6 +123,8 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
             if (cJSON_IsString(gcode_state_val) && gcode_state_val->valuestring != NULL) {
               int gcode_str_len = strlen(gcode_state_val->valuestring);
 
+              // TODO handle gcode states properly, this seems flaky, sometimes it sends a RUNNING message after it's actually done
+              /*
               if (strncmp(gcode_state_val->valuestring, "RUNNING", gcode_str_len) &&
                   bed_temper > 83.0) {
                 printf("Starting air filter fans\n");
@@ -103,18 +134,14 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
               if (strncmp(gcode_state_val->valuestring, "FINISH", gcode_str_len)) {
                 printf("Stopping air filter fans\n");
               }
+              */
             }
 
             if (cJSON_IsNumber(bed_temper_val) && bed_temper_val->valuedouble != 0) {
               bed_temper = bed_temper_val->valuedouble;
-            }
-
-            if (bed_temper > 83.0) {
-              run_fans_forever(BED_TEMP_PRIORITY);
-            }
-
-            if (bed_temper < 83.0) {
-              stop_running_fans(BED_TEMP_PRIORITY);
+              struct printer_event printerEventMessage = {0};
+              printerEventMessage.bed_temper = bed_temper;
+              xQueueSend(printerEventsHandle, (void*)&printerEventMessage, (TickType_t)0);
             }
 
           }
@@ -163,36 +190,27 @@ make_delay(int seconds) {
   return (1000*seconds) / portTICK_PERIOD_MS;
 }
 
-// Timer type definitions
-const TickType_t fan_TIMER_DELAY = (1000*60) / portTICK_PERIOD_MS;
-const TickType_t sensor_TIMER_DELAY = 1000 / portTICK_PERIOD_MS;
-const TickType_t fan_CB_PERIOD = (1000*10) / portTICK_PERIOD_MS;
-
-// Queue type definitions
-uint8_t fanQueueStorage[FAN_EV_NUM*sizeof (struct fan_event)]; // byte array for queue memory
-static StaticQueue_t fanEvents;
-QueueHandle_t fanEventsHandle;
-
-uint8_t thresholdQueueStorage[1*sizeof (struct fan_event)]; // byte array for queue memory
-static StaticQueue_t thresholdEvents;
-QueueHandle_t thresholdEventsHandle;
-
-// Task type definitions
-
-StaticTask_t fanRunnerTaskBuffer;
-StackType_t fanRunnerTaskStack[TASK_STACK_SIZE];
-
-StaticTask_t sensorManagerTaskBuffer;
-StackType_t sensorManagerTaskStack[TASK_STACK_SIZE];
-
-SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
-
 void
 sensorManagerTaskFunction(void *params) {
   int voc_max_threshold = VOC_MAX_THRESHOLD_DEFAULT;
   int voc_min_threshold = voc_max_threshold > 10 ? voc_max_threshold - 10 : 0;
-  struct threshold_event thresholdMessage;
+
+  float bed_temper_min_threshold = 83.0;
+  float bed_temper_max_threshold = 83.0;
+
+  double bed_temper = 0.0f;
+
+  struct threshold_event thresholdMessage = {0};
+  struct printer_event printerEventMessage = {0};
   while (1) {
+    if (fanEventsHandle != NULL) {
+      if (xQueueReceive(printerEventsHandle, &printerEventMessage, (TickType_t)sensor_TIMER_DELAY) == pdPASS) {
+        if (printerEventMessage.bed_temper > 0.0f) {
+          bed_temper = printerEventMessage.bed_temper;
+        }
+      }
+    }
+
     if (thresholdEventsHandle != NULL) {
       if (xQueueReceive(thresholdEventsHandle, &thresholdMessage, (TickType_t)sensor_TIMER_DELAY) == pdPASS) {
         if (thresholdMessage.voc_max_threshold > 0 && thresholdMessage.voc_max_threshold <= 500) {
@@ -213,6 +231,31 @@ sensorManagerTaskFunction(void *params) {
           printf("current voc_max_threshold = %d, current voc_min_threshold = %d\n", voc_max_threshold, voc_min_threshold);
         #endif
         }
+
+        if (thresholdMessage.bed_temper_min_threshold > 0 && thresholdMessage.bed_temper_min_threshold <= bed_temper_max_threshold) {
+          bed_temper_min_threshold = thresholdMessage.bed_temper_min_threshold;
+        }
+        else {
+        #ifdef CONFIG_DEBUG_MODE_ENABLED
+          printf("Could not set bed_temper_min_threshold to %f\n", thresholdMessage.bed_temper_min_threshold);
+          printf("current bed_temper_max_threshold = %f, current bed_temper_min_threshold = %f\n",
+                 bed_temper_max_threshold,
+                 bed_temper_min_threshold);
+        #endif
+        }
+
+        if (thresholdMessage.bed_temper_max_threshold > 0 && thresholdMessage.bed_temper_max_threshold >= bed_temper_min_threshold) {
+          bed_temper_max_threshold = thresholdMessage.bed_temper_max_threshold;
+        }
+        else {
+        #ifdef CONFIG_DEBUG_MODE_ENABLED
+          printf("Could not set bed_temper_max_threshold to %f\n", thresholdMessage.bed_temper_max_threshold);
+          printf("current bed_temper_max_threshold = %f, current bed_temper_min_threshold = %f\n",
+                 bed_temper_max_threshold,
+                 bed_temper_min_threshold);
+        #endif
+        }
+
       }
     }
 
@@ -254,10 +297,17 @@ sensorManagerTaskFunction(void *params) {
           }
 
           #ifdef CONFIG_DEBUG_MODE_ENABLED
-            if (sgp40_status_raw == ESP_OK) {
-              printf("raw_voc = %d\n", raw_voc);
-            }
+          if (sgp40_status_raw == ESP_OK) {
+            printf("raw_voc = %d\n", raw_voc);
+          }
           #endif
+          if (bed_temper > bed_temper_max_threshold) {
+            run_fans_forever(BED_TEMP_PRIORITY);
+          }
+
+          if (bed_temper < bed_temper_min_threshold) {
+            stop_running_fans(BED_TEMP_PRIORITY);
+          }
 
         }
 
@@ -834,6 +884,7 @@ app_main(void) {
     }
     fanEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct fan_event), fanQueueStorage, &fanEvents);
     thresholdEventsHandle = xQueueCreateStatic(1, sizeof (struct threshold_event), thresholdQueueStorage, &thresholdEvents);
+    printerEventsHandle = xQueueCreateStatic(10, sizeof (struct printer_event), printerEventsQueueStorage, &printerEvents);
 
     configASSERT(fanEventsHandle);
 
