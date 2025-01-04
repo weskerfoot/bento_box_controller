@@ -78,6 +78,9 @@
 
 #define TASK_STACK_SIZE 4000
 
+#define VOC_MAX_THRESHOLD_DEFAULT 140
+#define VOX_MIN_THRESHOLD_DEFAULT 130
+
 unsigned char bbl_ca_pem[] = {
   0x2d, 0x2d, 0x2d, 0x2d, 0x2d, 0x42, 0x45, 0x47, 0x49, 0x4e, 0x20, 0x43,
   0x45, 0x52, 0x54, 0x49, 0x46, 0x49, 0x43, 0x41, 0x54, 0x45, 0x2d, 0x2d,
@@ -200,11 +203,16 @@ typedef enum {
   FAN_OFF = 2,
 } event_type;
 
-struct event_t {
+struct fan_event {
   event_type fan;
   int fan_delay;
   int run_forever;
   int priority;
+};
+
+struct threshold_event {
+  int voc_max_threshold;
+  int voc_min_threshold;
 };
 
 void run_fans_forever();

@@ -72,7 +72,9 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
   case MQTT_EVENT_DATA:
       ESP_LOGI(TAG, "MQTT_EVENT_DATA");
       if (event->topic_len > 0 && event->data_len > 0) {
+      #ifdef CONFIG_DEBUG_MODE_ENABLED
         printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
+      #endif
         mqtt_data = cJSON_ParseWithLength(event->data, event->data_len);
         if (mqtt_data != NULL) {
 
@@ -86,8 +88,6 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
 
           cJSON *print_object = cJSON_GetObjectItemCaseSensitive(mqtt_data, "print");
           if (cJSON_IsObject(print_object)) {
-            printf("got print object\n");
-
             cJSON *gcode_state_val = cJSON_GetObjectItemCaseSensitive(print_object, "gcode_state");
             cJSON *bed_temper_val = cJSON_GetObjectItemCaseSensitive(print_object, "bed_temper");
 
@@ -168,9 +168,13 @@ const TickType_t fan_TIMER_DELAY = (1000*60) / portTICK_PERIOD_MS;
 const TickType_t fan_CB_PERIOD = (1000*10) / portTICK_PERIOD_MS;
 
 // Queue type definitions
-uint8_t queueStorage[FAN_EV_NUM*sizeof (struct event_t)]; // byte array for queue memory
+uint8_t fanQueueStorage[FAN_EV_NUM*sizeof (struct fan_event)]; // byte array for queue memory
 static StaticQueue_t fanEvents;
 QueueHandle_t fanEventsHandle;
+
+uint8_t thresholdQueueStorage[1*sizeof (struct fan_event)]; // byte array for queue memory
+static StaticQueue_t thresholdEvents;
+QueueHandle_t thresholdEventsHandle;
 
 // Task type definitions
 
@@ -184,8 +188,18 @@ SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
 
 void
 sensorManagerTaskFunction(void *params) {
+  int voc_max_threshold = VOC_MAX_THRESHOLD_DEFAULT;
+  int voc_min_threshold = VOX_MIN_THRESHOLD_DEFAULT;
+  struct threshold_event thresholdMessage;
   while (1) {
-    vTaskDelay(make_delay(10));
+    if (thresholdEventsHandle != NULL) {
+      if (xQueueReceive(thresholdEventsHandle, &thresholdMessage, (TickType_t)fan_TIMER_DELAY) == pdPASS) {
+        voc_max_threshold = thresholdMessage.voc_max_threshold;
+        voc_min_threshold = thresholdMessage.voc_min_threshold;
+      }
+    }
+
+    vTaskDelay(make_delay(2));
     if (sensorSemaphore != NULL) {
       if (xSemaphoreTake(sensorSemaphore, (TickType_t)10) == pdTRUE) {
 
@@ -195,8 +209,10 @@ sensorManagerTaskFunction(void *params) {
         uint16_t raw_voc = 0;
 
         if (sht3x_measure(sensor, &temperature, &humidity)) {
+        #ifdef CONFIG_DEBUG_MODE_ENABLED
           printf("temperature = %f\n", (double)temperature);
           printf("humidity = %f\n", (double)humidity);
+        #endif
 
           esp_err_t sgp40_status = sgp40_measure_voc(&air_q_sensor,
                                                      humidity,
@@ -209,18 +225,22 @@ sensorManagerTaskFunction(void *params) {
                                                          &raw_voc);
 
           if (sgp40_status == ESP_OK) {
+          #ifdef CONFIG_DEBUG_MODE_ENABLED
             printf("voc_index = %ld\n", voc_index);
-            if (voc_index > 105) { // TODO, make threshold configurable, test with ABS, etc
+          #endif
+            if (voc_index > voc_max_threshold) { // TODO, make threshold configurable, test with ABS, etc
               run_fans_forever(SENSOR_PRIORITY);
             }
-            if (voc_index <= 100) {
+            if (voc_index <= voc_min_threshold) {
               stop_running_fans(SENSOR_PRIORITY);
             }
           }
 
-          if (sgp40_status_raw == ESP_OK) {
-            printf("raw_voc = %d\n", raw_voc);
-          }
+          #ifdef CONFIG_DEBUG_MODE_ENABLED
+            if (sgp40_status_raw == ESP_OK) {
+              printf("raw_voc = %d\n", raw_voc);
+            }
+          #endif
 
         }
 
@@ -235,7 +255,7 @@ sensorManagerTaskFunction(void *params) {
 
 void
 fanRunnerTaskFunction(void *params) {
-  struct event_t fanMessage;
+  struct fan_event fanMessage;
   int current_priority = LOWEST_PRIORITY;
 
   printf("Task started\n");
@@ -290,7 +310,7 @@ createfanRunnerTask(void) {
 
 void
 run_fans(int delay, int priority) {
-  struct event_t message;
+  struct fan_event message;
   message.fan = FAN_ON;
   message.priority = priority;
   message.fan_delay = make_delay(delay);
@@ -301,7 +321,7 @@ run_fans(int delay, int priority) {
 
 void
 stop_running_fans(int priority) {
-  struct event_t message;
+  struct fan_event message;
   message.fan = FAN_OFF;
   message.priority = priority;
   xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
@@ -309,7 +329,7 @@ stop_running_fans(int priority) {
 
 void
 run_fans_forever(int priority) {
-  struct event_t message;
+  struct fan_event message;
   message.fan = FAN_ON;
   message.fan_delay = -1;
   message.run_forever = 1;
@@ -318,66 +338,117 @@ run_fans_forever(int priority) {
   xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
 }
 
+
+esp_err_t
+set_sensor_thresholds_handler(httpd_req_t *req) {
+  printf("fans_on_handler executed\n");
+  char req_body[HTTPD_RESP_SIZE+1] = {0};
+  char resp[HTTPD_RESP_SIZE] = {1};
+
+  size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
+
+  // Receive body and do error handling
+  int ret = httpd_req_recv(req, req_body, body_size);
+
+  // if ret == 0 then no data
+  if (ret < 0) {
+    if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+      httpd_resp_send_408(req);
+    }
+    return ESP_FAIL;
+  }
+
+  struct threshold_event thresholdMessage;
+  thresholdMessage.voc_max_threshold = -1;
+  thresholdMessage.voc_min_threshold = -1; // -1 means no change
+
+  cJSON *json = cJSON_ParseWithLength(req_body, HTTPD_RESP_SIZE);
+
+  if (json != NULL) {
+    if (cJSON_IsObject(json)) {
+      cJSON *voc_max_j = cJSON_GetObjectItemCaseSensitive(json, "voc_max_threshold");
+      cJSON *voc_min_j = cJSON_GetObjectItemCaseSensitive(json, "voc_min_threshold");
+      if (cJSON_IsNumber(voc_max_j)) {
+        printf("Setting new voc max: voc_max_threshold = %d\n", voc_max_j->valueint);
+        thresholdMessage.voc_max_threshold = voc_max_j->valueint;
+      }
+      if (cJSON_IsNumber(voc_min_j)) {
+        printf("Setting new voc min: voc_min_threshold = %d\n", voc_min_j->valueint);
+        thresholdMessage.voc_min_threshold = voc_min_j->valueint;
+      }
+    }
+  }
+  else {
+    return ESP_FAIL;
+  }
+
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_status(req, HTTPD_200);
+  httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+
+  xQueueSend(thresholdEventsHandle, (void*)&thresholdMessage, (TickType_t)0);
+  return ESP_OK;
+}
+
 esp_err_t
 get_sensor_data_handler(httpd_req_t *req) {
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
+  time_t now;
+  struct tm timeinfo;
+  time(&now);
+  localtime_r(&now, &timeinfo);
 
-    float temperature;
-    float humidity;
-    int32_t voc_index;
-    uint16_t raw_voc;
+  float temperature;
+  float humidity;
+  int32_t voc_index;
+  uint16_t raw_voc;
 
-    char resp[HTTPD_RESP_SIZE] = {0};
+  char resp[HTTPD_RESP_SIZE] = {0};
+  cJSON *resp_object_j = cJSON_CreateObject();
 
-    cJSON *resp_object_j = cJSON_CreateObject();
+  if (xSemaphoreTake(sensorSemaphore, (TickType_t)10) == pdTRUE) {
+    if (sht3x_measure(sensor, &temperature, &humidity)) {
+      cJSON_AddNumberToObject(resp_object_j, "temperature", (double)temperature);
+      cJSON_AddNumberToObject(resp_object_j, "humidity", (double)humidity);
 
-    if (xSemaphoreTake(sensorSemaphore, (TickType_t)10) == pdTRUE) {
-      if (sht3x_measure(sensor, &temperature, &humidity)) {
-        cJSON_AddNumberToObject(resp_object_j, "temperature", (double)temperature);
-        cJSON_AddNumberToObject(resp_object_j, "humidity", (double)humidity);
+      esp_err_t sgp40_status = sgp40_measure_voc(&air_q_sensor,
+                                                 humidity,
+                                                 temperature,
+                                                 &voc_index);
 
-        esp_err_t sgp40_status = sgp40_measure_voc(&air_q_sensor,
-                                                   humidity,
-                                                   temperature,
-                                                   &voc_index);
-
-        esp_err_t sgp40_status_raw = sgp40_measure_raw(&air_q_sensor,
-                                                       humidity,
-                                                       temperature,
-                                                       &raw_voc);
+      esp_err_t sgp40_status_raw = sgp40_measure_raw(&air_q_sensor,
+                                                     humidity,
+                                                     temperature,
+                                                     &raw_voc);
 
 
-        if (sgp40_status == ESP_OK) {
-          cJSON_AddNumberToObject(resp_object_j, "voc_index", voc_index);
-        }
-
-        if (sgp40_status_raw == ESP_OK) {
-          cJSON_AddNumberToObject(resp_object_j, "raw_voc", raw_voc);
-        }
-
+      if (sgp40_status == ESP_OK) {
+        cJSON_AddNumberToObject(resp_object_j, "voc_index", voc_index);
       }
 
-      cJSON_AddNumberToObject(resp_object_j, "hour", (double)timeinfo.tm_hour);
-      cJSON_AddNumberToObject(resp_object_j, "minute", (double)timeinfo.tm_min);
+      if (sgp40_status_raw == ESP_OK) {
+        cJSON_AddNumberToObject(resp_object_j, "raw_voc", raw_voc);
+      }
 
-      cJSON_PrintPreallocated(resp_object_j, resp, HTTPD_RESP_SIZE, false);
-
-      if (resp_object_j != NULL) { cJSON_Delete(resp_object_j); }
-
-      httpd_resp_set_type(req, "application/json");
-      httpd_resp_set_status(req, HTTPD_200);
-      httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-
-      xSemaphoreGive(sensorSemaphore);
-      return ESP_OK;
     }
-    else {
-      printf("failed to acquire sensor semaphore in web request\n");
-      return ESP_FAIL;
-    }
+
+    cJSON_AddNumberToObject(resp_object_j, "hour", (double)timeinfo.tm_hour);
+    cJSON_AddNumberToObject(resp_object_j, "minute", (double)timeinfo.tm_min);
+
+    cJSON_PrintPreallocated(resp_object_j, resp, HTTPD_RESP_SIZE, false);
+
+    if (resp_object_j != NULL) { cJSON_Delete(resp_object_j); }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req, HTTPD_200);
+    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+
+    xSemaphoreGive(sensorSemaphore);
+    return ESP_OK;
+  }
+  else {
+    printf("failed to acquire sensor semaphore in web request\n");
+    return ESP_FAIL;
+  }
 }
 
 esp_err_t
@@ -421,6 +492,14 @@ fans_on_handler(httpd_req_t *req) {
 }
 
 /* URI handler structure for GET /uri */
+httpd_uri_t set_sensor_thresholds = {
+    .uri      = "/sensor",
+    .method   = HTTP_POST,
+    .handler  = set_sensor_thresholds_handler,
+    .user_ctx = NULL
+};
+
+/* URI handler structure for GET /uri */
 httpd_uri_t get_sensor_data = {
     .uri      = "/sensor",
     .method   = HTTP_GET,
@@ -450,6 +529,7 @@ start_webserver(void) {
     if (httpd_start(&server, &config) == ESP_OK) {
         /* Register URI handlers */
         httpd_register_uri_handler(server, &get_sensor_data);
+        httpd_register_uri_handler(server, &set_sensor_thresholds);
         httpd_register_uri_handler(server, &fans_on);
     }
     /* If server failed to start, handle will be NULL */
@@ -723,7 +803,8 @@ app_main(void) {
             vTaskDelay(2000 / portTICK_PERIOD_MS);
         }
     }
-    fanEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct event_t), queueStorage, &fanEvents);
+    fanEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct fan_event), fanQueueStorage, &fanEvents);
+    thresholdEventsHandle = xQueueCreateStatic(1, sizeof (struct threshold_event), thresholdQueueStorage, &thresholdEvents);
 
     configASSERT(fanEventsHandle);
 
