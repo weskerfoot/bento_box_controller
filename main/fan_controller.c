@@ -165,6 +165,7 @@ make_delay(int seconds) {
 
 // Timer type definitions
 const TickType_t fan_TIMER_DELAY = (1000*60) / portTICK_PERIOD_MS;
+const TickType_t sensor_TIMER_DELAY = 1000 / portTICK_PERIOD_MS;
 const TickType_t fan_CB_PERIOD = (1000*10) / portTICK_PERIOD_MS;
 
 // Queue type definitions
@@ -189,19 +190,35 @@ SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
 void
 sensorManagerTaskFunction(void *params) {
   int voc_max_threshold = VOC_MAX_THRESHOLD_DEFAULT;
-  int voc_min_threshold = VOX_MIN_THRESHOLD_DEFAULT;
+  int voc_min_threshold = voc_max_threshold > 10 ? voc_max_threshold - 10 : 0;
   struct threshold_event thresholdMessage;
   while (1) {
     if (thresholdEventsHandle != NULL) {
-      if (xQueueReceive(thresholdEventsHandle, &thresholdMessage, (TickType_t)fan_TIMER_DELAY) == pdPASS) {
-        voc_max_threshold = thresholdMessage.voc_max_threshold;
-        voc_min_threshold = thresholdMessage.voc_min_threshold;
+      if (xQueueReceive(thresholdEventsHandle, &thresholdMessage, (TickType_t)sensor_TIMER_DELAY) == pdPASS) {
+        if (thresholdMessage.voc_max_threshold > 0 && thresholdMessage.voc_max_threshold <= 500) {
+          voc_max_threshold = thresholdMessage.voc_max_threshold;
+        }
+        else {
+        #ifdef CONFIG_DEBUG_MODE_ENABLED
+          printf("Could not set voc_max_threshold to %d\n", thresholdMessage.voc_max_threshold);
+          printf("current voc_max_threshold = %d, current voc_min_threshold = %d\n", voc_max_threshold, voc_min_threshold);
+        #endif
+        }
+        if (thresholdMessage.voc_min_threshold > 0 && thresholdMessage.voc_min_threshold < voc_max_threshold) {
+          voc_min_threshold = thresholdMessage.voc_min_threshold;
+        }
+        else {
+        #ifdef CONFIG_DEBUG_MODE_ENABLED
+          printf("Could not set voc_min_threshold to %d\n", thresholdMessage.voc_min_threshold);
+          printf("current voc_max_threshold = %d, current voc_min_threshold = %d\n", voc_max_threshold, voc_min_threshold);
+        #endif
+        }
       }
     }
 
     vTaskDelay(make_delay(2));
     if (sensorSemaphore != NULL) {
-      if (xSemaphoreTake(sensorSemaphore, (TickType_t)10) == pdTRUE) {
+      if (xSemaphoreTake(sensorSemaphore, (TickType_t)4) == pdTRUE) {
 
         float temperature = 0.0;
         float humidity = 0.0;
@@ -368,13 +385,25 @@ set_sensor_thresholds_handler(httpd_req_t *req) {
     if (cJSON_IsObject(json)) {
       cJSON *voc_max_j = cJSON_GetObjectItemCaseSensitive(json, "voc_max_threshold");
       cJSON *voc_min_j = cJSON_GetObjectItemCaseSensitive(json, "voc_min_threshold");
-      if (cJSON_IsNumber(voc_max_j)) {
+      if (cJSON_IsNumber(voc_max_j) && cJSON_IsNumber(voc_min_j)) {
+        #ifdef CONFIG_DEBUG_MODE_ENABLED
         printf("Setting new voc max: voc_max_threshold = %d\n", voc_max_j->valueint);
-        thresholdMessage.voc_max_threshold = voc_max_j->valueint;
-      }
-      if (cJSON_IsNumber(voc_min_j)) {
         printf("Setting new voc min: voc_min_threshold = %d\n", voc_min_j->valueint);
+        #endif
+        thresholdMessage.voc_max_threshold = voc_max_j->valueint;
         thresholdMessage.voc_min_threshold = voc_min_j->valueint;
+
+        if ((thresholdMessage.voc_min_threshold > thresholdMessage.voc_max_threshold) ||
+            (thresholdMessage.voc_max_threshold < 0) ||
+            (thresholdMessage.voc_min_threshold < 0)) {
+          #ifdef CONFIG_DEBUG_MODE_ENABLED
+          printf("Could not set voc values, attempted max = %d, attempted min = %d\n", voc_max_j->valueint, voc_min_j->valueint);
+          printf("Setting voc_min_threshold = %d\n", VOC_MAX_THRESHOLD_DEFAULT-10);
+          printf("Setting voc_max_threshold = %d\n", VOC_MAX_THRESHOLD_DEFAULT);
+          #endif
+          thresholdMessage.voc_max_threshold = VOC_MAX_THRESHOLD_DEFAULT;
+          thresholdMessage.voc_min_threshold = VOC_MAX_THRESHOLD_DEFAULT-10;
+        }
       }
     }
   }
