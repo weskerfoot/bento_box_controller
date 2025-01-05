@@ -33,7 +33,8 @@ StackType_t sensorManagerTaskStack[TASK_STACK_SIZE];
 SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
 
 
-static void set_fan(int fan_num, int state) {
+static void
+set_fan(int fan_num, int state) {
     // Set duty to 100%
     ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, fan_num, state == 1 ? LEDC_DUTY: 0));
     // Update duty to apply the new value
