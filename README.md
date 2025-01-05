@@ -1,6 +1,6 @@
-### Solar powered plant watering
+### Bambu Printer air filter controller
 
-This is the code for my air filtration control system.
+This is the code for my air filtration control system. It is designed to integrate with a Bambu printer and control an air filtration system, e.g. a Bento Box air filter
 
 It uses two sensors, one for air temperature and humidity, and one for VOCs.
 The temperature/humidity sensor is used to calibrate the VOC sensor.
