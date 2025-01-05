@@ -22,7 +22,6 @@ uint8_t printerEventsQueueStorage[10*sizeof (struct fan_event)]; // byte array f
 static StaticQueue_t printerEvents;
 QueueHandle_t printerEventsHandle;
 
-
 // Task type definitions
 
 StaticTask_t fanRunnerTaskBuffer;
