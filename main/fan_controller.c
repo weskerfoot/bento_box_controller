@@ -10,28 +10,27 @@ const TickType_t sensor_TIMER_DELAY = 1000 / portTICK_PERIOD_MS;
 const TickType_t fan_CB_PERIOD = (1000*10) / portTICK_PERIOD_MS;
 
 // Queue type definitions
-uint8_t fanQueueStorage[FAN_EV_NUM*sizeof (struct fan_event)]; // byte array for queue memory
+static uint8_t fanQueueStorage[FAN_EV_NUM*sizeof (struct fan_event)];
 static StaticQueue_t fanEvents;
-QueueHandle_t fanEventsHandle;
+static QueueHandle_t fanEventsHandle;
 
-uint8_t thresholdQueueStorage[10*sizeof (struct fan_event)]; // byte array for queue memory
+static uint8_t thresholdQueueStorage[10*sizeof (struct fan_event)];
 static StaticQueue_t thresholdEvents;
-QueueHandle_t thresholdEventsHandle;
+static QueueHandle_t thresholdEventsHandle;
 
-uint8_t printerEventsQueueStorage[10*sizeof (struct fan_event)]; // byte array for queue memory
+static uint8_t printerEventsQueueStorage[10*sizeof (struct fan_event)];
 static StaticQueue_t printerEvents;
-QueueHandle_t printerEventsHandle;
+static QueueHandle_t printerEventsHandle;
 
 // Task type definitions
 
-StaticTask_t fanRunnerTaskBuffer;
-StackType_t fanRunnerTaskStack[TASK_STACK_SIZE];
+static StaticTask_t fanRunnerTaskBuffer;
+static StackType_t fanRunnerTaskStack[TASK_STACK_SIZE];
 
-StaticTask_t sensorManagerTaskBuffer;
-StackType_t sensorManagerTaskStack[TASK_STACK_SIZE];
+static StaticTask_t sensorManagerTaskBuffer;
+static StackType_t sensorManagerTaskStack[TASK_STACK_SIZE];
 
 SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
-
 
 static void
 set_fan(int fan_num, int state) {
