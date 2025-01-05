@@ -1,14 +1,26 @@
 ### Solar powered plant watering
 
-This is the code for my prototype automated plant watering system, which uses two pumps to automatically water my plants, and also monitors the ambient humidity and temperature.
+This is the code for my air filtration control system.
 
-### Hardware Required
+It uses two sensors, one for air temperature and humidity, and one for VOCs.
+The temperature/humidity sensor is used to calibrate the VOC sensor.
 
-* A development board with any Espressif SoC (e.g., ESP32-DevKitC, ESP-WROVER-KIT, etc.)
-* A USB cable for Power supply and programming
-* Some jumper wires to connect GPIOs.
+It is designed to allow you to to integrate with the MQTT server built into
+Bambu printers.
+
+It also has a JSON based HTTP api which lets you configure thresholds for when
+the air filter will run (which is controlled by MOSFETs)
 
 ### Configure the project
+Run `idf.py menuconfig` and set the variables in the fan controller config
+section.
+
+E.g.
+WiFI SSID: <your wifi SSID>
+WiFI Password: <your wifi password>
+Maximum WiFI Retry Count: 10
+Broker URI: `mqtts://bblp:<password>@192.168.0.186:8883`
+Device Serial Number: <your serial number> (can be obtained from the printer itself)
 
 ### Build and Flash
 
