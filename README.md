@@ -17,9 +17,13 @@ section.
 
 E.g.
 WiFI SSID: <your wifi SSID>
+
 WiFI Password: <your wifi password>
+
 Maximum WiFI Retry Count: 10
+
 Broker URI: `mqtts://bblp:<password>@192.168.0.186:8883`
+
 Device Serial Number: <your serial number> (can be obtained from the printer itself)
 
 ### Build and Flash
