@@ -51,7 +51,7 @@ fans_off() {
   set_fan(1, 0);
 }
 
-void
+static void
 initSGP40() {
     ESP_ERROR_CHECK(i2cdev_init());
     ESP_ERROR_CHECK(sgp40_init_desc(&air_q_sensor, AC_I2C_BUS, AC_SDA, AC_SCL));
@@ -192,7 +192,7 @@ make_delay(int seconds) {
   return (1000*seconds) / portTICK_PERIOD_MS;
 }
 
-void
+static void
 sensorManagerTaskFunction(void *params) {
   int voc_max_threshold = VOC_MAX_THRESHOLD_DEFAULT;
   int voc_min_threshold = voc_max_threshold > 10 ? voc_max_threshold - 10 : 0;
@@ -323,7 +323,7 @@ sensorManagerTaskFunction(void *params) {
   }
 }
 
-void
+static void
 fanRunnerTaskFunction(void *params) {
   struct fan_event fanMessage;
   int current_priority = LOWEST_PRIORITY;
@@ -574,13 +574,11 @@ get_sensor_data_handler(httpd_req_t *req) {
 esp_err_t
 fans_on_handler(httpd_req_t *req) {
   printf("fans_on_handler executed\n");
-  // TODO stream
   char req_body[HTTPD_RESP_SIZE+1] = {0};
   char resp[HTTPD_RESP_SIZE] = {1};
 
   size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
 
-  // Receive body and do error handling
   int ret = httpd_req_recv(req, req_body, body_size);
 
   // if ret == 0 then no data
@@ -592,7 +590,6 @@ fans_on_handler(httpd_req_t *req) {
   }
 
   cJSON *json = cJSON_ParseWithLength(req_body, HTTPD_RESP_SIZE);
-
   cJSON *fan_time_j = NULL;
 
   if (json != NULL) {
