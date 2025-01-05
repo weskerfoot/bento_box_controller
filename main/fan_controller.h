@@ -224,6 +224,9 @@ struct printer_event {
   double bed_temper;
 };
 
-void run_fans_forever();
-void run_fans(int, int);
-void stop_running_fans(int);
+static void wifi_init_sta(void);
+static void run_fans_forever();
+static void run_fans(int, int);
+static void stop_running_fans(int);
+static void obtain_time(void);
+static void initialize_sntp(void);

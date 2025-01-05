@@ -659,12 +659,7 @@ start_webserver(void) {
  */
 RTC_DATA_ATTR static int boot_count = 0;
 
-static void obtain_time(void);
-static void initialize_sntp(void);
-
-void wifi_init_sta(void);
-
-void
+static void
 time_sync_notification_cb(struct timeval *tv) {
     ESP_LOGI(TAG, "Notification of a time synchronization event");
 }
