@@ -16,13 +16,14 @@ uint8_t fanQueueStorage[FAN_EV_NUM*sizeof (struct fan_event)]; // byte array for
 static StaticQueue_t fanEvents;
 QueueHandle_t fanEventsHandle;
 
-uint8_t thresholdQueueStorage[1*sizeof (struct fan_event)]; // byte array for queue memory
+uint8_t thresholdQueueStorage[10*sizeof (struct fan_event)]; // byte array for queue memory
 static StaticQueue_t thresholdEvents;
 QueueHandle_t thresholdEventsHandle;
 
 uint8_t printerEventsQueueStorage[10*sizeof (struct fan_event)]; // byte array for queue memory
 static StaticQueue_t printerEvents;
 QueueHandle_t printerEventsHandle;
+
 
 // Task type definitions
 
@@ -141,11 +142,14 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
               bed_temper = bed_temper_val->valuedouble;
               struct printer_event printerEventMessage = {0};
               printerEventMessage.bed_temper = bed_temper;
-              xQueueSend(printerEventsHandle, (void*)&printerEventMessage, (TickType_t)0);
+
+              if (printerEventsHandle != NULL) {
+                xQueueSend(printerEventsHandle, (void*)&printerEventMessage, (TickType_t)0);
+              }
             }
 
           }
-          cJSON_Delete(mqtt_data);
+          if (mqtt_data != NULL) { cJSON_Delete(mqtt_data); }
         }
       }
       break;
@@ -207,6 +211,7 @@ sensorManagerTaskFunction(void *params) {
       if (xQueueReceive(printerEventsHandle, &printerEventMessage, (TickType_t)sensor_TIMER_DELAY) == pdPASS) {
         if (printerEventMessage.bed_temper > 0.0f) {
           bed_temper = printerEventMessage.bed_temper;
+          printf("Got bed temper in sensor manager, bed_temper = %f\n", bed_temper);
         }
       }
     }
@@ -232,7 +237,7 @@ sensorManagerTaskFunction(void *params) {
         #endif
         }
 
-        if (thresholdMessage.bed_temper_min_threshold > 0 && thresholdMessage.bed_temper_min_threshold <= bed_temper_max_threshold) {
+        if (thresholdMessage.bed_temper_min_threshold > 0.0f && thresholdMessage.bed_temper_min_threshold <= bed_temper_max_threshold) {
           bed_temper_min_threshold = thresholdMessage.bed_temper_min_threshold;
         }
         else {
@@ -244,7 +249,7 @@ sensorManagerTaskFunction(void *params) {
         #endif
         }
 
-        if (thresholdMessage.bed_temper_max_threshold > 0 && thresholdMessage.bed_temper_max_threshold >= bed_temper_min_threshold) {
+        if (thresholdMessage.bed_temper_max_threshold > 0.0f && thresholdMessage.bed_temper_max_threshold >= bed_temper_min_threshold) {
           bed_temper_max_threshold = thresholdMessage.bed_temper_max_threshold;
         }
         else {
@@ -408,14 +413,14 @@ run_fans_forever(int priority) {
 
 esp_err_t
 set_sensor_thresholds_handler(httpd_req_t *req) {
-  printf("fans_on_handler executed\n");
-  char req_body[HTTPD_RESP_SIZE+1] = {0};
-  char resp[HTTPD_RESP_SIZE] = {1};
+  printf("set sensor thresholds handler executed\n");
+  char content[HTTPD_RESP_SIZE];
+  char resp[] = "Set thresholds";
 
-  size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
+  size_t recv_size = MIN(req->content_len, (sizeof(content)-1));
 
   // Receive body and do error handling
-  int ret = httpd_req_recv(req, req_body, body_size);
+  int ret = httpd_req_recv(req, content, recv_size);
 
   // if ret == 0 then no data
   if (ret < 0) {
@@ -428,21 +433,22 @@ set_sensor_thresholds_handler(httpd_req_t *req) {
   struct threshold_event thresholdMessage;
   thresholdMessage.voc_max_threshold = -1;
   thresholdMessage.voc_min_threshold = -1; // -1 means no change
+  thresholdMessage.bed_temper_min_threshold = -1.0f;
+  thresholdMessage.bed_temper_max_threshold = -1.0f; // -1 means no change
 
-  cJSON *json = cJSON_ParseWithLength(req_body, HTTPD_RESP_SIZE);
+  cJSON *json = cJSON_ParseWithLength(content, recv_size);
 
   if (json != NULL) {
     if (cJSON_IsObject(json)) {
       cJSON *voc_max_j = cJSON_GetObjectItemCaseSensitive(json, "voc_max_threshold");
       cJSON *voc_min_j = cJSON_GetObjectItemCaseSensitive(json, "voc_min_threshold");
+
+      cJSON *bed_temper_max_j = cJSON_GetObjectItemCaseSensitive(json, "bed_temper_max_threshold");
+      cJSON *bed_temper_min_j = cJSON_GetObjectItemCaseSensitive(json, "bed_temper_min_threshold");
+
       if (cJSON_IsNumber(voc_max_j) && cJSON_IsNumber(voc_min_j)) {
-        #ifdef CONFIG_DEBUG_MODE_ENABLED
-        printf("Setting new voc max: voc_max_threshold = %d\n", voc_max_j->valueint);
-        printf("Setting new voc min: voc_min_threshold = %d\n", voc_min_j->valueint);
-        #endif
         thresholdMessage.voc_max_threshold = voc_max_j->valueint;
         thresholdMessage.voc_min_threshold = voc_min_j->valueint;
-
         if ((thresholdMessage.voc_min_threshold > thresholdMessage.voc_max_threshold) ||
             (thresholdMessage.voc_max_threshold < 0) ||
             (thresholdMessage.voc_min_threshold < 0)) {
@@ -454,9 +460,42 @@ set_sensor_thresholds_handler(httpd_req_t *req) {
           thresholdMessage.voc_max_threshold = VOC_MAX_THRESHOLD_DEFAULT;
           thresholdMessage.voc_min_threshold = VOC_MAX_THRESHOLD_DEFAULT-10;
         }
+        else {
+          #ifdef CONFIG_DEBUG_MODE_ENABLED
+          printf("Setting new voc max: voc_max_threshold = %d\n", voc_max_j->valueint);
+          printf("Setting new voc min: voc_min_threshold = %d\n", voc_min_j->valueint);
+          #endif
+        }
+      }
+
+      if (cJSON_IsNumber(bed_temper_max_j) && cJSON_IsNumber(bed_temper_min_j)) {
+        thresholdMessage.bed_temper_max_threshold = bed_temper_max_j->valuedouble;
+        thresholdMessage.bed_temper_min_threshold = bed_temper_min_j->valuedouble;
+        if ((thresholdMessage.bed_temper_min_threshold > thresholdMessage.bed_temper_max_threshold) ||
+            (thresholdMessage.bed_temper_max_threshold < 0.0f) ||
+            (thresholdMessage.bed_temper_min_threshold < 0.0f)) {
+          #ifdef CONFIG_DEBUG_MODE_ENABLED
+          printf("Could not set bed temper values, attempted max = %f, attempted min = %f\n",
+                 bed_temper_max_j->valuedouble,
+                 bed_temper_min_j->valuedouble);
+
+          printf("Setting bed_temper_max_threshold = %f\n", BED_TEMPER_MAX_THRESHOLD_DEFAULT-2);
+          printf("Setting bed_temper_min_threshold = %f\n", BED_TEMPER_MAX_THRESHOLD_DEFAULT);
+          #endif
+
+          thresholdMessage.bed_temper_max_threshold = BED_TEMPER_MAX_THRESHOLD_DEFAULT;
+          thresholdMessage.bed_temper_min_threshold = BED_TEMPER_MAX_THRESHOLD_DEFAULT-2;
+        }
+        else {
+          #ifdef CONFIG_DEBUG_MODE_ENABLED
+          printf("Setting new bed temper max: bed_temper_max_threshold = %f\n", bed_temper_max_j->valuedouble);
+          printf("Setting new bed temper min: bed_temper_min_threshold = %f\n", bed_temper_min_j->valuedouble);
+          #endif
+        }
       }
     }
   }
+
   else {
     return ESP_FAIL;
   }
@@ -465,7 +504,11 @@ set_sensor_thresholds_handler(httpd_req_t *req) {
   httpd_resp_set_status(req, HTTPD_200);
   httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
 
-  xQueueSend(thresholdEventsHandle, (void*)&thresholdMessage, (TickType_t)0);
+  if (json != NULL) { cJSON_Delete(json); }
+
+  if (thresholdEventsHandle != NULL) {
+    xQueueSend(thresholdEventsHandle, (void*)&thresholdMessage, (TickType_t)0);
+  }
   return ESP_OK;
 }
 
@@ -883,7 +926,7 @@ app_main(void) {
         }
     }
     fanEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct fan_event), fanQueueStorage, &fanEvents);
-    thresholdEventsHandle = xQueueCreateStatic(1, sizeof (struct threshold_event), thresholdQueueStorage, &thresholdEvents);
+    thresholdEventsHandle = xQueueCreateStatic(10, sizeof (struct threshold_event), thresholdQueueStorage, &thresholdEvents);
     printerEventsHandle = xQueueCreateStatic(10, sizeof (struct printer_event), printerEventsQueueStorage, &printerEvents);
 
     configASSERT(fanEventsHandle);

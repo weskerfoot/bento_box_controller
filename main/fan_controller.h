@@ -76,9 +76,10 @@
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
 
-#define TASK_STACK_SIZE 4000
+#define TASK_STACK_SIZE 5000
 
 #define VOC_MAX_THRESHOLD_DEFAULT 140
+#define BED_TEMPER_MAX_THRESHOLD_DEFAULT 83.0f
 
 unsigned char bbl_ca_pem[] = {
   0x2d, 0x2d, 0x2d, 0x2d, 0x2d, 0x42, 0x45, 0x47, 0x49, 0x4e, 0x20, 0x43,
