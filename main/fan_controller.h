@@ -1,3 +1,6 @@
+#include "sht3x.h"
+#include "cjson.h"
+#include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/spi_common.h"
 #include "driver/uart.h"
@@ -24,12 +27,14 @@
 #include "nvs_flash.h"
 #include "protocol_examples_common.h"
 #include "sdkconfig.h"
+#include "sdkconfig.h"
 #include <esp_event.h>
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
 #include <nvs_flash.h>
+#include <sgp40.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -37,9 +42,6 @@
 #include <sys/param.h>
 #include <sys/time.h>
 #include <time.h>
-#include <sgp40.h>
-#include "driver/gpio.h"
-#include "sdkconfig.h"
 
 #define WIFI_SSID CONFIG_ESP_WIFI_SSID
 #define WIFI_PASS CONFIG_ESP_WIFI_PASS

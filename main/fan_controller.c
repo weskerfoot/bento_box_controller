@@ -1,6 +1,4 @@
 #include "./fan_controller.h"
-#include "sht3x.h"
-#include "cjson.h"
 
 static const char *TAG = "fan_controller";
 static sht3x_sensor_t* sensor;
