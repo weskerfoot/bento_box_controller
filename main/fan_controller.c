@@ -192,7 +192,7 @@ make_delay(int seconds) {
 }
 
 static void
-sensorManagerTaskFunction(void *params) {
+sensor_manager_task_function(void *params) {
   int voc_max_threshold = VOC_MAX_THRESHOLD_DEFAULT;
   int voc_min_threshold = voc_max_threshold > 10 ? voc_max_threshold - 10 : 0;
 
@@ -323,7 +323,7 @@ sensorManagerTaskFunction(void *params) {
 }
 
 static void
-fanRunnerTaskFunction(void *params) {
+fan_runner_task_function(void *params) {
   struct fan_event fanMessage;
   int current_priority = LOWEST_PRIORITY;
 
@@ -358,7 +358,7 @@ fanRunnerTaskFunction(void *params) {
 
 static void
 createSensorManagerTask(void) {
-  xTaskCreateStatic(sensorManagerTaskFunction,
+  xTaskCreateStatic(sensor_manager_task_function,
                     "sensormant",
                      TASK_STACK_SIZE,
                      (void*)1,
@@ -368,7 +368,7 @@ createSensorManagerTask(void) {
 }
 static void
 createfanRunnerTask(void) {
-  xTaskCreateStatic(fanRunnerTaskFunction,
+  xTaskCreateStatic(fan_runner_task_function,
                     "fant",
                      TASK_STACK_SIZE,
                      (void*)1,
@@ -377,7 +377,7 @@ createfanRunnerTask(void) {
                      &fanRunnerTaskBuffer);
 }
 
-void
+static void
 run_fans(int delay, int priority) {
   struct fan_event message;
   message.fan = FAN_ON;
@@ -388,7 +388,7 @@ run_fans(int delay, int priority) {
   xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
 }
 
-void
+static void
 stop_running_fans(int priority) {
   struct fan_event message;
   message.fan = FAN_OFF;
@@ -396,7 +396,7 @@ stop_running_fans(int priority) {
   xQueueSend(fanEventsHandle, (void*)&message, (TickType_t)0);
 }
 
-void
+static void
 run_fans_forever(int priority) {
   struct fan_event message;
   message.fan = FAN_ON;
@@ -408,7 +408,7 @@ run_fans_forever(int priority) {
 }
 
 
-esp_err_t
+static esp_err_t
 set_sensor_thresholds_handler(httpd_req_t *req) {
   printf("set sensor thresholds handler executed\n");
   char content[HTTPD_RESP_SIZE];
@@ -509,7 +509,7 @@ set_sensor_thresholds_handler(httpd_req_t *req) {
   return ESP_OK;
 }
 
-esp_err_t
+static esp_err_t
 get_sensor_data_handler(httpd_req_t *req) {
   time_t now;
   struct tm timeinfo;
@@ -570,7 +570,7 @@ get_sensor_data_handler(httpd_req_t *req) {
   }
 }
 
-esp_err_t
+static esp_err_t
 fans_on_handler(httpd_req_t *req) {
   printf("fans_on_handler executed\n");
   char req_body[HTTPD_RESP_SIZE+1] = {0};
@@ -766,7 +766,7 @@ event_handler(void *arg,
     }
 }
 
-void
+static void
 wifi_init_sta(void) {
     s_wifi_event_group = xEventGroupCreate();
 
