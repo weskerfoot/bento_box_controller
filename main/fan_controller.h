@@ -224,6 +224,10 @@ struct printer_event {
   double bed_temper;
 };
 
+struct mqtt_handler_event {
+  int restart;
+};
+
 static void wifi_init_sta(void);
 static void run_fans_forever();
 static void run_fans(int, int);

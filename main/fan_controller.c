@@ -1,5 +1,14 @@
 #include "./fan_controller.h"
 
+static char broker_uri[50] = CONFIG_BROKER_URI;
+
+static esp_mqtt_client_config_t mqtt_cfg = {
+  .broker = {
+    .address.uri = &broker_uri[0]
+    //.verification.certificate = (const char *)bbl_ca_pem
+  },
+};
+
 static const char *TAG = "fan_controller";
 static sht3x_sensor_t* sensor;
 static sgp40_t air_q_sensor;
@@ -8,19 +17,24 @@ static sgp40_t air_q_sensor;
 const TickType_t fan_TIMER_DELAY = (1000*60) / portTICK_PERIOD_MS;
 const TickType_t sensor_TIMER_DELAY = 1000 / portTICK_PERIOD_MS;
 const TickType_t fan_CB_PERIOD = (1000*10) / portTICK_PERIOD_MS;
+const TickType_t mqtt_handler_DELAY = (1000*5) / portTICK_PERIOD_MS;
 
 // Queue type definitions
 static uint8_t fanQueueStorage[FAN_EV_NUM*sizeof (struct fan_event)];
 static StaticQueue_t fanEvents;
 static QueueHandle_t fanEventsHandle;
 
-static uint8_t thresholdQueueStorage[10*sizeof (struct fan_event)];
+static uint8_t thresholdQueueStorage[10*sizeof (struct threshold_event)];
 static StaticQueue_t thresholdEvents;
 static QueueHandle_t thresholdEventsHandle;
 
-static uint8_t printerEventsQueueStorage[10*sizeof (struct fan_event)];
+static uint8_t printerEventsQueueStorage[10*sizeof (struct printer_event)];
 static StaticQueue_t printerEvents;
 static QueueHandle_t printerEventsHandle;
+
+static uint8_t mqttHandlerQueueStorage[10*sizeof (struct mqtt_handler_event)];
+static StaticQueue_t mqttHandlerEvents;
+static QueueHandle_t mqttHandlerEventsHandle;
 
 // Task type definitions
 
@@ -29,6 +43,9 @@ static StackType_t fanRunnerTaskStack[TASK_STACK_SIZE];
 
 static StaticTask_t sensorManagerTaskBuffer;
 static StackType_t sensorManagerTaskStack[TASK_STACK_SIZE];
+
+static StaticTask_t mqttEventHandlerTaskBuffer;
+static StackType_t mqttEventHandlerTaskStack[TASK_STACK_SIZE];
 
 SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
 
@@ -52,16 +69,19 @@ fans_off() {
 
 static void
 initSGP40() {
-    ESP_ERROR_CHECK(i2cdev_init());
-    ESP_ERROR_CHECK(sgp40_init_desc(&air_q_sensor, AC_I2C_BUS, AC_SDA, AC_SCL));
-    ESP_ERROR_CHECK(sgp40_init(&air_q_sensor));
+    i2cdev_init();
+    sgp40_init_desc(&air_q_sensor, AC_I2C_BUS, AC_SDA, AC_SCL);
+    sgp40_init(&air_q_sensor);
     ESP_LOGI(TAG, "SGP40 initilalized. Serial: 0x%04x%04x%04x",
             air_q_sensor.serial[0], air_q_sensor.serial[1], air_q_sensor.serial[2]);
 }
 
 // MQTT callback
 static void
-mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
+mqtt_event_handler(void *handler_args,
+                   esp_event_base_t base,
+                   int32_t event_id,
+                   void *event_data) {
   ESP_LOGD(TAG, "Event dispatched from event loop base=%s, event_id=%" PRIi32, base, event_id);
   esp_mqtt_event_handle_t event = event_data;
   esp_mqtt_client_handle_t client = event->client;
@@ -69,7 +89,6 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
   cJSON *mqtt_data;
   char *json_st;
 
-  // This might be inefficient
   static double bed_temper = 0.0;
 
   // whether the printer is currently running or not
@@ -170,20 +189,44 @@ mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, 
 }
 
 static void
-mqtt_app_start(void) {
-  const esp_mqtt_client_config_t mqtt_cfg = {
-    .broker = {
-      .address.uri = CONFIG_BROKER_URI
-      //.verification.certificate = (const char *)bbl_ca_pem
-    },
-  };
-
+mqtt_event_handler_function(void *params) {
   ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
   esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
   /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
   esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-  esp_mqtt_client_start(client);
+  int is_client_running = 0;
 
+  if (esp_mqtt_client_start(client) == ESP_OK) {
+    is_client_running = 1;
+  }
+
+  struct mqtt_handler_event mqttEventHandlerEvent = {0};
+
+  while (1) {
+    if (mqttHandlerEventsHandle != NULL) {
+      if (xQueueReceive(mqttHandlerEventsHandle, &mqttEventHandlerEvent, (TickType_t)mqtt_handler_DELAY) == pdPASS) {
+        if (mqttEventHandlerEvent.restart == 1) {
+          printf("Restarting the MQTT client\n");
+
+          esp_mqtt_client_unregister_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler);
+
+          if (esp_mqtt_client_stop(client) == ESP_OK) {
+            printf("Successfully stopped the current MQTT client\n");
+            is_client_running = 0;
+            if (esp_mqtt_client_destroy(client) == ESP_OK) {
+              printf("Successfully destroyed the current MQTT client\n");
+              client = esp_mqtt_client_init(&mqtt_cfg);
+              esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+              if (esp_mqtt_client_start(client) == ESP_OK) {
+                printf("Successfully restarted the MQTT client\n");
+                is_client_running = 1;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 static TickType_t
@@ -359,22 +402,34 @@ fan_runner_task_function(void *params) {
 static void
 createSensorManagerTask(void) {
   xTaskCreateStatic(sensor_manager_task_function,
-                    "sensormant",
+                    "sensorman_task",
                      TASK_STACK_SIZE,
                      (void*)1,
                      tskIDLE_PRIORITY + 2,
                      sensorManagerTaskStack,
                      &sensorManagerTaskBuffer);
 }
+
 static void
 createfanRunnerTask(void) {
   xTaskCreateStatic(fan_runner_task_function,
-                    "fant",
+                    "fan_task",
                      TASK_STACK_SIZE,
                      (void*)1,
                      tskIDLE_PRIORITY + 2,
                      fanRunnerTaskStack,
                      &fanRunnerTaskBuffer);
+}
+
+static void
+createMqttHandlerTask(void) {
+  xTaskCreateStatic(mqtt_event_handler_function,
+                    "mqttevhandler_task",
+                     TASK_STACK_SIZE,
+                     (void*)1,
+                     tskIDLE_PRIORITY + 1,
+                     mqttEventHandlerTaskStack,
+                     &mqttEventHandlerTaskBuffer);
 }
 
 static void
@@ -411,13 +466,13 @@ run_fans_forever(int priority) {
 static esp_err_t
 set_sensor_thresholds_handler(httpd_req_t *req) {
   printf("set sensor thresholds handler executed\n");
-  char content[HTTPD_RESP_SIZE];
+  char req_body[HTTPD_RESP_SIZE];
   char resp[] = "Set thresholds";
 
-  size_t recv_size = MIN(req->content_len, (sizeof(content)-1));
+  size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
 
   // Receive body and do error handling
-  int ret = httpd_req_recv(req, content, recv_size);
+  int ret = httpd_req_recv(req, req_body, body_size);
 
   // if ret == 0 then no data
   if (ret < 0) {
@@ -433,7 +488,7 @@ set_sensor_thresholds_handler(httpd_req_t *req) {
   thresholdMessage.bed_temper_min_threshold = -1.0f;
   thresholdMessage.bed_temper_max_threshold = -1.0f; // -1 means no change
 
-  cJSON *json = cJSON_ParseWithLength(content, recv_size);
+  cJSON *json = cJSON_ParseWithLength(req_body, body_size);
 
   if (json != NULL) {
     if (cJSON_IsObject(json)) {
@@ -571,6 +626,60 @@ get_sensor_data_handler(httpd_req_t *req) {
 }
 
 static esp_err_t
+update_mqtt_cfg_handler(httpd_req_t *req) {
+  printf("update_mqtt_cfg_handler executed\n");
+  char req_body[HTTPD_RESP_SIZE+1] = {0};
+  char resp[HTTPD_RESP_SIZE] = {1};
+
+  size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
+  int ret = httpd_req_recv(req, req_body, body_size);
+
+  // if ret == 0 then no data
+  if (ret < 0) {
+    if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+      httpd_resp_send_408(req);
+    }
+    return ESP_FAIL;
+  }
+
+  cJSON *json = cJSON_ParseWithLength(req_body, body_size);
+
+  if (json != NULL) {
+    if (cJSON_IsObject(json)) {
+      cJSON *broker_uri_j = cJSON_GetObjectItemCaseSensitive(json, "broker_uri");
+      if (cJSON_IsString(broker_uri_j)) {
+        struct mqtt_handler_event event;
+        size_t new_broker_uri_size = strlen(broker_uri_j->valuestring);
+
+        printf("new broker uri = %s\n", broker_uri_j->valuestring);
+        if (new_broker_uri_size < (sizeof broker_uri)) {
+          memset((void*)mqtt_cfg.broker.address.uri, 0, (sizeof broker_uri));
+
+          strncpy(mqtt_cfg.broker.address.uri,
+                  broker_uri_j->valuestring,
+                  new_broker_uri_size);
+
+          event.restart = 1;
+
+          xQueueSend(mqttHandlerEventsHandle, (void*)&event, (TickType_t)0);
+        }
+      }
+      else {
+        printf("Got something that was not a string in update_mqtt_cfg_handler\n");
+      }
+    }
+  }
+  else {
+    printf("Failed to parse json in update_mqtt_cfg_handler\n");
+  }
+
+  httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
+
+  if (json != NULL) { cJSON_Delete(json); }
+  return ESP_OK;
+}
+
+static esp_err_t
 fans_on_handler(httpd_req_t *req) {
   printf("fans_on_handler executed\n");
   char req_body[HTTPD_RESP_SIZE+1] = {0};
@@ -588,7 +697,7 @@ fans_on_handler(httpd_req_t *req) {
     return ESP_FAIL;
   }
 
-  cJSON *json = cJSON_ParseWithLength(req_body, HTTPD_RESP_SIZE);
+  cJSON *json = cJSON_ParseWithLength(req_body, body_size);
   cJSON *fan_time_j = NULL;
 
   if (json != NULL) {
@@ -623,6 +732,14 @@ httpd_uri_t get_sensor_data = {
     .user_ctx = NULL
 };
 
+/* URI handler structure for POST /update_mqtt_cfg */
+httpd_uri_t update_mqtt_cfg = {
+    .uri      = "/update_mqtt_cfg",
+    .method   = HTTP_POST,
+    .handler  = update_mqtt_cfg_handler,
+    .user_ctx = NULL
+};
+
 /* URI handler structure for POST /fans_on */
 httpd_uri_t fans_on = {
     .uri      = "/fans_on",
@@ -646,6 +763,7 @@ start_webserver(void) {
         /* Register URI handlers */
         httpd_register_uri_handler(server, &get_sensor_data);
         httpd_register_uri_handler(server, &set_sensor_thresholds);
+        httpd_register_uri_handler(server, &update_mqtt_cfg);
         httpd_register_uri_handler(server, &fans_on);
     }
     /* If server failed to start, handle will be NULL */
@@ -827,10 +945,9 @@ wifi_init_sta(void) {
         ESP_LOGI(TAG, "connected to ap SSID:%s password:%s",
                  WIFI_SSID, WIFI_PASS);
 
-        httpd_handle_t server;
         printf("Trying to start webserver\n");
-        server = start_webserver();
-        mqtt_app_start();
+        (void)start_webserver(); // result unused currently
+        createMqttHandlerTask();
 
     }
     else if (bits & WIFI_FAIL_BIT) {
@@ -917,8 +1034,12 @@ app_main(void) {
     fanEventsHandle = xQueueCreateStatic(FAN_EV_NUM, sizeof (struct fan_event), fanQueueStorage, &fanEvents);
     thresholdEventsHandle = xQueueCreateStatic(10, sizeof (struct threshold_event), thresholdQueueStorage, &thresholdEvents);
     printerEventsHandle = xQueueCreateStatic(10, sizeof (struct printer_event), printerEventsQueueStorage, &printerEvents);
+    mqttHandlerEventsHandle = xQueueCreateStatic(10, sizeof (struct printer_event), mqttHandlerQueueStorage, &mqttHandlerEvents);
 
     configASSERT(fanEventsHandle);
+    configASSERT(thresholdEventsHandle);
+    configASSERT(printerEventsHandle);
+    configASSERT(mqttHandlerEventsHandle);
 
     i2c_init(I2C_BUS, I2C_SCL_PIN, I2C_SDA_PIN, I2C_FREQ_100K);
 
