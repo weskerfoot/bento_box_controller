@@ -199,8 +199,6 @@ typedef enum {
   LOWEST_PRIORITY = 4
 } control_priority;
 
-void runfans(int);
-
 typedef enum {
   FAN_ON = 1,
   FAN_OFF = 2,

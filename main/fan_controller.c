@@ -717,7 +717,7 @@ fans_on_handler(httpd_req_t *req) {
 }
 
 /* URI handler structure for GET /uri */
-httpd_uri_t set_sensor_thresholds = {
+static httpd_uri_t set_sensor_thresholds = {
     .uri      = "/sensor",
     .method   = HTTP_POST,
     .handler  = set_sensor_thresholds_handler,
@@ -725,7 +725,7 @@ httpd_uri_t set_sensor_thresholds = {
 };
 
 /* URI handler structure for GET /uri */
-httpd_uri_t get_sensor_data = {
+static httpd_uri_t get_sensor_data = {
     .uri      = "/sensor",
     .method   = HTTP_GET,
     .handler  = get_sensor_data_handler,
@@ -733,7 +733,7 @@ httpd_uri_t get_sensor_data = {
 };
 
 /* URI handler structure for POST /update_mqtt_cfg */
-httpd_uri_t update_mqtt_cfg = {
+static httpd_uri_t update_mqtt_cfg = {
     .uri      = "/update_mqtt_cfg",
     .method   = HTTP_POST,
     .handler  = update_mqtt_cfg_handler,
@@ -741,7 +741,7 @@ httpd_uri_t update_mqtt_cfg = {
 };
 
 /* URI handler structure for POST /fans_on */
-httpd_uri_t fans_on = {
+static httpd_uri_t fans_on = {
     .uri      = "/fans_on",
     .method   = HTTP_POST,
     .handler  = fans_on_handler,
