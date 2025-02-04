@@ -1,6 +1,6 @@
 #include "./fan_controller.h"
 
-static char broker_uri[50] = CONFIG_BROKER_URI;
+static char broker_uri[MQTT_BROKER_URI_MAX_SIZE] = CONFIG_BROKER_URI;
 
 static esp_mqtt_client_config_t mqtt_cfg = {
   .broker = {
@@ -627,6 +627,10 @@ get_sensor_data_handler(httpd_req_t *req) {
 
 static esp_err_t
 update_mqtt_cfg_handler(httpd_req_t *req) {
+  esp_err_t nvs_err;
+  nvs_handle_t nvs_handle;
+  nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+
   printf("update_mqtt_cfg_handler executed\n");
   char req_body[HTTPD_RESP_SIZE+1] = {0};
   char resp[HTTPD_RESP_SIZE] = {1};
@@ -655,13 +659,39 @@ update_mqtt_cfg_handler(httpd_req_t *req) {
         if (new_broker_uri_size < (sizeof broker_uri)) {
           memset((void*)mqtt_cfg.broker.address.uri, 0, (sizeof broker_uri));
 
-          strncpy(mqtt_cfg.broker.address.uri,
-                  broker_uri_j->valuestring,
-                  new_broker_uri_size);
+          if (new_broker_uri_size > 0) {
+            strncpy(mqtt_cfg.broker.address.uri,
+                    broker_uri_j->valuestring,
+                    new_broker_uri_size);
+          }
+          else {
+            char default_broker_uri[MQTT_BROKER_URI_MAX_SIZE] = CONFIG_BROKER_URI;
+            printf("Empty broker_uri detected, so we are resetting it to the default\n");
+            strncpy(mqtt_cfg.broker.address.uri,
+                    default_broker_uri,
+                    (sizeof default_broker_uri));
+          }
 
           event.restart = 1;
-
           xQueueSend(mqttHandlerEventsHandle, (void*)&event, (TickType_t)0);
+
+          if (new_broker_uri_size <= 0) {
+            printf("Erasing mqtt_broker_uri key\n");
+            nvs_err = nvs_erase_key(nvs_handle, "mqtt_broker_uri");
+          }
+          else {
+            printf("Setting mqtt_broker_uri key in nvram to %s\n", broker_uri_j->valuestring);
+            nvs_err = nvs_set_str(nvs_handle, "mqtt_broker_uri", broker_uri_j->valuestring);
+          }
+
+          if (nvs_err != ESP_OK) {
+            printf("Failed to write the MQTT broker URI to nvram!\n");
+            printf("Continuing execution anyway but it will not be persisted to nvram\n");
+          }
+          else {
+            nvs_commit(nvs_handle);
+          }
+
         }
       }
       else {
@@ -990,6 +1020,37 @@ void
 app_main(void) {
     ++boot_count;
     ESP_LOGI(TAG, "Boot count: %d", boot_count);
+
+    // Initialize NVS
+    esp_err_t nvs_storage_err = nvs_flash_init();
+    if (nvs_storage_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_storage_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // NVS partition was truncated and needs to be erased
+        // Retry nvs_flash_init
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_storage_err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs_storage_err);
+
+    nvs_handle_t nvs_handle;
+
+    nvs_storage_err = nvs_open("storage", NVS_READONLY, &nvs_handle);
+
+    ESP_ERROR_CHECK(nvs_storage_err);
+
+    size_t mqtt_broker_req_size = 0;
+
+    esp_err_t nvs_get_str_err = nvs_get_str(nvs_handle, "mqtt_broker_uri", NULL, &mqtt_broker_req_size);
+
+    if (nvs_get_str_err != ESP_OK) {
+      printf("MQTT broker URI could not be read from nvram, using default configured one instead\n");
+    }
+    else if (mqtt_broker_req_size > MQTT_BROKER_URI_MAX_SIZE) {
+      printf("MQTT broker URI stored in nvram too long (size = %zu), using default configured one instead\n", mqtt_broker_req_size);
+    }
+    else {
+      printf("Restoring MQTT broker URI from nvram, mqtt_broker_req_size = %zu\n", mqtt_broker_req_size);
+      nvs_get_str_err = nvs_get_str(nvs_handle, "mqtt_broker_uri", broker_uri, &mqtt_broker_req_size);
+    }
 
     // fan stuff
     // Set the LEDC peripheral configuration

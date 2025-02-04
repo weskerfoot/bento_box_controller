@@ -1,4 +1,3 @@
-#include "sht3x.h"
 #include "cjson.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -24,15 +23,16 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "mqtt_client.h"
-#include "nvs_flash.h"
 #include "protocol_examples_common.h"
 #include "sdkconfig.h"
 #include "sdkconfig.h"
+#include "sht3x.h"
 #include <esp_event.h>
 #include <esp_http_server.h>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
+#include "nvs.h"
 #include <nvs_flash.h>
 #include <sgp40.h>
 #include <stddef.h>
@@ -42,6 +42,9 @@
 #include <sys/param.h>
 #include <sys/time.h>
 #include <time.h>
+
+// The amount of bytes that will be allocated to store the MQTT broker URI
+#define MQTT_BROKER_URI_MAX_SIZE 50
 
 #define WIFI_SSID CONFIG_ESP_WIFI_SSID
 #define WIFI_PASS CONFIG_ESP_WIFI_PASS
