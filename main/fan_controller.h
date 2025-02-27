@@ -235,3 +235,41 @@ static void run_fans(int, int);
 static void stop_running_fans(int);
 static void obtain_time(void);
 static void initialize_sntp(void);
+
+static size_t
+get_string_from_nvs(nvs_handle_t nvs_handle,
+                    size_t max_output_size,
+                    const char *key_name,
+                    char *output) {
+    size_t req_size = 0;
+
+    esp_err_t nvs_get_str_err = nvs_get_str(nvs_handle, key_name, NULL, &req_size);
+
+    if (nvs_get_str_err != ESP_OK) {
+      printf("Value could not be read from nvram\n");
+    }
+    else if (req_size > max_output_size) {
+      printf("Value stored in nvram too long, req_size = %zu, but max_output_size = %zu\n",
+             req_size,
+             max_output_size);
+    }
+    else {
+      printf("Restoring value from nvram, %s = %zu\n", key_name, req_size);
+      nvs_get_str_err = nvs_get_str(nvs_handle, key_name, output, &req_size);
+    }
+    return req_size;
+}
+
+static esp_err_t
+get_int32_from_nvs(nvs_handle_t nvs_handle,
+                   const char *key_name,
+                   int *output) {
+    esp_err_t nvs_get_i32_err = nvs_get_i32(nvs_handle, key_name, output);
+
+    if (nvs_get_i32_err != ESP_OK) {
+      printf("Value could not be read from nvram, using existing value\n");
+      return nvs_get_i32_err;
+    }
+    printf("Restored int32 value from nvs, value = %d\n", *output);
+    return nvs_get_i32_err;
+}

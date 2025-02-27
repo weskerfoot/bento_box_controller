@@ -236,16 +236,32 @@ make_delay(int seconds) {
 
 static void
 sensor_manager_task_function(void *params) {
+  nvs_handle_t nvs_handle;
+  esp_err_t nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+  esp_err_t nvs_set_voc_max_err;
+  esp_err_t nvs_set_voc_min_err;
+
   int voc_max_threshold = VOC_MAX_THRESHOLD_DEFAULT;
-  int voc_min_threshold = voc_max_threshold > 10 ? voc_max_threshold - 10 : 0;
+  int voc_min_threshold = VOC_MAX_THRESHOLD_DEFAULT > 10 ? VOC_MAX_THRESHOLD_DEFAULT - 10 : 0;
+
+  get_int32_from_nvs(nvs_handle, "voc_max_thresh", &voc_max_threshold);
+  get_int32_from_nvs(nvs_handle, "voc_min_thresh", &voc_min_threshold);
+
+  printf("Starting sensor manager\n");
+  printf("voc_max_threshold = %d, voc_min_threshold = %d\n", voc_max_threshold, voc_min_threshold);
 
   float bed_temper_min_threshold = 83.0;
   float bed_temper_max_threshold = 83.0;
+
+  printf("bed_temper_max_threshold = %f, bed_temper_min_threshold = %f\n",
+         bed_temper_max_threshold,
+         bed_temper_min_threshold);
 
   double bed_temper = 0.0f;
 
   struct threshold_event thresholdMessage = {0};
   struct printer_event printerEventMessage = {0};
+
   while (1) {
     if (fanEventsHandle != NULL) {
       if (xQueueReceive(printerEventsHandle, &printerEventMessage, (TickType_t)sensor_TIMER_DELAY) == pdPASS) {
@@ -260,6 +276,14 @@ sensor_manager_task_function(void *params) {
       if (xQueueReceive(thresholdEventsHandle, &thresholdMessage, (TickType_t)sensor_TIMER_DELAY) == pdPASS) {
         if (thresholdMessage.voc_max_threshold > 0 && thresholdMessage.voc_max_threshold <= 500) {
           voc_max_threshold = thresholdMessage.voc_max_threshold;
+          nvs_set_voc_max_err = nvs_erase_key(nvs_handle, "vox_max_thresh");
+          nvs_set_voc_max_err = nvs_set_i32(nvs_handle, "voc_max_thresh", (int32_t)voc_max_threshold);
+          if (nvs_set_voc_max_err != ESP_OK) {
+            printf("Error setting voc max to value %d\n", voc_max_threshold);
+          }
+          else {
+            nvs_commit(nvs_handle);
+          }
         }
         else {
         #ifdef CONFIG_DEBUG_MODE_ENABLED
@@ -269,6 +293,14 @@ sensor_manager_task_function(void *params) {
         }
         if (thresholdMessage.voc_min_threshold > 0 && thresholdMessage.voc_min_threshold < voc_max_threshold) {
           voc_min_threshold = thresholdMessage.voc_min_threshold;
+          nvs_set_voc_max_err = nvs_erase_key(nvs_handle, "voc_min_thresh");
+          nvs_set_voc_min_err = nvs_set_i32(nvs_handle, "voc_min_thresh", (int32_t)voc_min_threshold);
+          if (nvs_set_voc_min_err != ESP_OK) {
+            printf("Error setting voc min to value %d\n", voc_min_threshold);
+          }
+          else {
+            nvs_commit(nvs_handle);
+          }
         }
         else {
         #ifdef CONFIG_DEBUG_MODE_ENABLED
@@ -310,7 +342,7 @@ sensor_manager_task_function(void *params) {
 
         float temperature = 0.0;
         float humidity = 0.0;
-        int32_t voc_index = 0;
+        int voc_index = 0;
         uint16_t raw_voc = 0;
 
         if (sht3x_measure(sensor, &temperature, &humidity)) {
@@ -331,7 +363,7 @@ sensor_manager_task_function(void *params) {
 
           if (sgp40_status == ESP_OK) {
           #ifdef CONFIG_DEBUG_MODE_ENABLED
-            printf("voc_index = %ld\n", voc_index);
+            printf("voc_index = %d\n", voc_index);
           #endif
             if (voc_index > voc_max_threshold) { // TODO, make threshold configurable, test with ABS, etc
               run_fans_forever(SENSOR_PRIORITY);
@@ -627,9 +659,8 @@ get_sensor_data_handler(httpd_req_t *req) {
 
 static esp_err_t
 update_mqtt_cfg_handler(httpd_req_t *req) {
-  esp_err_t nvs_err;
   nvs_handle_t nvs_handle;
-  nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+  esp_err_t nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
 
   printf("update_mqtt_cfg_handler executed\n");
   char req_body[HTTPD_RESP_SIZE+1] = {0};
@@ -1016,30 +1047,6 @@ ledc_init(int gpio_num,
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
-static size_t
-get_string_from_nvs(nvs_handle_t nvs_handle,
-                    size_t max_output_size,
-                    const char *key_name,
-                    char *output) {
-    size_t req_size = 0;
-
-    esp_err_t nvs_get_str_err = nvs_get_str(nvs_handle, key_name, NULL, &req_size);
-
-    if (nvs_get_str_err != ESP_OK) {
-      printf("Value could not be read from nvram\n");
-    }
-    else if (req_size > max_output_size) {
-      printf("Value stored in nvram too long, req_size = %zu, but max_output_size = %zu\n",
-             req_size,
-             max_output_size);
-    }
-    else {
-      printf("Restoring value from nvram, %s = %zu\n", key_name, req_size);
-      nvs_get_str_err = nvs_get_str(nvs_handle, key_name, output, &req_size);
-    }
-    return req_size;
-}
-
 void
 app_main(void) {
     ++boot_count;
@@ -1053,13 +1060,12 @@ app_main(void) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         nvs_storage_err = nvs_flash_init();
     }
+
     ESP_ERROR_CHECK(nvs_storage_err);
 
     nvs_handle_t nvs_handle;
 
     nvs_storage_err = nvs_open("storage", NVS_READONLY, &nvs_handle);
-
-    ESP_ERROR_CHECK(nvs_storage_err);
 
     size_t mqtt_broker_req_size = get_string_from_nvs(nvs_handle,
                                                       MQTT_BROKER_URI_MAX_SIZE,
