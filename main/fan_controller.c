@@ -1017,16 +1017,21 @@ ledc_init(int gpio_num,
 }
 
 static size_t
-get_string_from_nvs(nvs_handle_t nvs_handle, const char *key_name, char *output) {
+get_string_from_nvs(nvs_handle_t nvs_handle,
+                    size_t max_output_size,
+                    const char *key_name,
+                    char *output) {
     size_t req_size = 0;
 
     esp_err_t nvs_get_str_err = nvs_get_str(nvs_handle, key_name, NULL, &req_size);
 
     if (nvs_get_str_err != ESP_OK) {
-      printf("Value could not be read from nvram, using default configured one instead\n");
+      printf("Value could not be read from nvram\n");
     }
-    else if (req_size > MQTT_BROKER_URI_MAX_SIZE) {
-      printf("Value stored in nvram too long (size = %zu)\n", req_size);
+    else if (req_size > max_output_size) {
+      printf("Value stored in nvram too long, req_size = %zu, but max_output_size = %zu\n",
+             req_size,
+             max_output_size);
     }
     else {
       printf("Restoring value from nvram, %s = %zu\n", key_name, req_size);
@@ -1056,7 +1061,10 @@ app_main(void) {
 
     ESP_ERROR_CHECK(nvs_storage_err);
 
-    size_t mqtt_broker_req_size = get_string_from_nvs(nvs_handle, "mqtt_broker_uri", broker_uri);
+    size_t mqtt_broker_req_size = get_string_from_nvs(nvs_handle,
+                                                      MQTT_BROKER_URI_MAX_SIZE,
+                                                      "mqtt_broker_uri",
+                                                      broker_uri);
 
     // fan stuff
     // Set the LEDC peripheral configuration
