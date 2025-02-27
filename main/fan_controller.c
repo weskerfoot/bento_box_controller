@@ -204,24 +204,24 @@ mqtt_event_handler_function(void *params) {
 
   while (1) {
     if (mqttHandlerEventsHandle != NULL) {
-      if (xQueueReceive(mqttHandlerEventsHandle, &mqttEventHandlerEvent, (TickType_t)mqtt_handler_DELAY) == pdPASS) {
-        if (mqttEventHandlerEvent.restart == 1) {
-          printf("Restarting the MQTT client\n");
+      BaseType_t msg_status = xQueueReceive(mqttHandlerEventsHandle, &mqttEventHandlerEvent, (TickType_t)mqtt_handler_DELAY);
+      if (msg_status != pdPASS || mqttEventHandlerEvent.restart != 1) {
+        continue;
+      }
 
-          esp_mqtt_client_unregister_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler);
+      printf("Restarting the MQTT client\n");
+      esp_mqtt_client_unregister_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler);
 
-          if (esp_mqtt_client_stop(client) == ESP_OK) {
-            printf("Successfully stopped the current MQTT client\n");
-            is_client_running = 0;
-            if (esp_mqtt_client_destroy(client) == ESP_OK) {
-              printf("Successfully destroyed the current MQTT client\n");
-              client = esp_mqtt_client_init(&mqtt_cfg);
-              esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-              if (esp_mqtt_client_start(client) == ESP_OK) {
-                printf("Successfully restarted the MQTT client\n");
-                is_client_running = 1;
-              }
-            }
+      if (esp_mqtt_client_stop(client) == ESP_OK) {
+        printf("Successfully stopped the current MQTT client\n");
+        is_client_running = 0;
+        if (esp_mqtt_client_destroy(client) == ESP_OK) {
+          printf("Successfully destroyed the current MQTT client\n");
+          client = esp_mqtt_client_init(&mqtt_cfg);
+          esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+          if (esp_mqtt_client_start(client) == ESP_OK) {
+            printf("Successfully restarted the MQTT client\n");
+            is_client_running = 1;
           }
         }
       }
@@ -264,11 +264,10 @@ sensor_manager_task_function(void *params) {
 
   while (1) {
     if (fanEventsHandle != NULL) {
-      if (xQueueReceive(printerEventsHandle, &printerEventMessage, (TickType_t)sensor_TIMER_DELAY) == pdPASS) {
-        if (printerEventMessage.bed_temper > 0.0f) {
-          bed_temper = printerEventMessage.bed_temper;
-          printf("Got bed temper in sensor manager, bed_temper = %f\n", bed_temper);
-        }
+      BaseType_t printer_msg_status = xQueueReceive(printerEventsHandle, &printerEventMessage, (TickType_t)sensor_TIMER_DELAY);
+      if (printer_msg_status == pdPASS && printerEventMessage.bed_temper > 0.0f) {
+        bed_temper = printerEventMessage.bed_temper;
+        printf("Got bed temper in sensor manager, bed_temper = %f\n", bed_temper);
       }
     }
 
@@ -332,7 +331,6 @@ sensor_manager_task_function(void *params) {
                  bed_temper_min_threshold);
         #endif
         }
-
       }
     }
 
@@ -982,7 +980,7 @@ wifi_init_sta(void) {
             /* Setting a password implies station will connect to all security modes including WEP/WPA.
              * However these modes are deprecated and not advisable to be used. Incase your Access point
              * doesn't support WPA2, these mode can be enabled by commenting below line */
-	          .threshold.authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD,
+            .threshold.authmode = ESP_WIFI_SCAN_AUTH_MODE_THRESHOLD,
         },
     };
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA) );
