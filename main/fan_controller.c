@@ -10,7 +10,7 @@ static esp_mqtt_client_config_t mqtt_cfg = {
 };
 
 static const char *TAG = "fan_controller";
-static sht3x_sensor_t* sensor;
+static sht3x_sensor_t *sensor;
 static sgp40_t air_q_sensor;
 
 // Timer type definitions
@@ -1016,6 +1016,25 @@ ledc_init(int gpio_num,
     ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
+static size_t
+get_string_from_nvs(nvs_handle_t nvs_handle, const char *key_name, char *output) {
+    size_t req_size = 0;
+
+    esp_err_t nvs_get_str_err = nvs_get_str(nvs_handle, key_name, NULL, &req_size);
+
+    if (nvs_get_str_err != ESP_OK) {
+      printf("Value could not be read from nvram, using default configured one instead\n");
+    }
+    else if (req_size > MQTT_BROKER_URI_MAX_SIZE) {
+      printf("Value stored in nvram too long (size = %zu)\n", req_size);
+    }
+    else {
+      printf("Restoring value from nvram, %s = %zu\n", key_name, req_size);
+      nvs_get_str_err = nvs_get_str(nvs_handle, key_name, output, &req_size);
+    }
+    return req_size;
+}
+
 void
 app_main(void) {
     ++boot_count;
@@ -1037,20 +1056,7 @@ app_main(void) {
 
     ESP_ERROR_CHECK(nvs_storage_err);
 
-    size_t mqtt_broker_req_size = 0;
-
-    esp_err_t nvs_get_str_err = nvs_get_str(nvs_handle, "mqtt_broker_uri", NULL, &mqtt_broker_req_size);
-
-    if (nvs_get_str_err != ESP_OK) {
-      printf("MQTT broker URI could not be read from nvram, using default configured one instead\n");
-    }
-    else if (mqtt_broker_req_size > MQTT_BROKER_URI_MAX_SIZE) {
-      printf("MQTT broker URI stored in nvram too long (size = %zu), using default configured one instead\n", mqtt_broker_req_size);
-    }
-    else {
-      printf("Restoring MQTT broker URI from nvram, mqtt_broker_req_size = %zu\n", mqtt_broker_req_size);
-      nvs_get_str_err = nvs_get_str(nvs_handle, "mqtt_broker_uri", broker_uri, &mqtt_broker_req_size);
-    }
+    size_t mqtt_broker_req_size = get_string_from_nvs(nvs_handle, "mqtt_broker_uri", broker_uri);
 
     // fan stuff
     // Set the LEDC peripheral configuration
