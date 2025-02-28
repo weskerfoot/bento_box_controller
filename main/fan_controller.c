@@ -677,55 +677,53 @@ update_mqtt_cfg_handler(httpd_req_t *req) {
 
   cJSON *json = cJSON_ParseWithLength(req_body, body_size);
 
-  if (json != NULL) {
-    if (cJSON_IsObject(json)) {
-      cJSON *broker_uri_j = cJSON_GetObjectItemCaseSensitive(json, "broker_uri");
-      if (cJSON_IsString(broker_uri_j)) {
-        struct mqtt_handler_event event;
-        size_t new_broker_uri_size = strlen(broker_uri_j->valuestring);
+  if (json != NULL && cJSON_IsObject(json)) {
+    cJSON *broker_uri_j = cJSON_GetObjectItemCaseSensitive(json, "broker_uri");
+    if (cJSON_IsString(broker_uri_j)) {
+      struct mqtt_handler_event event;
+      size_t new_broker_uri_size = strlen(broker_uri_j->valuestring);
 
-        printf("new broker uri = %s\n", broker_uri_j->valuestring);
-        if (new_broker_uri_size < (sizeof broker_uri)) {
-          memset((void*)mqtt_cfg.broker.address.uri, 0, (sizeof broker_uri));
+      printf("new broker uri = %s\n", broker_uri_j->valuestring);
+      if (new_broker_uri_size < (sizeof broker_uri)) {
+        memset((void*)mqtt_cfg.broker.address.uri, 0, (sizeof broker_uri));
 
-          if (new_broker_uri_size > 0) {
-            strncpy(mqtt_cfg.broker.address.uri,
-                    broker_uri_j->valuestring,
-                    new_broker_uri_size);
-          }
-          else {
-            char default_broker_uri[MQTT_BROKER_URI_MAX_SIZE] = CONFIG_BROKER_URI;
-            printf("Empty broker_uri detected, so we are resetting it to the default\n");
-            strncpy(mqtt_cfg.broker.address.uri,
-                    default_broker_uri,
-                    (sizeof default_broker_uri));
-          }
-
-          event.restart = 1;
-          xQueueSend(mqttHandlerEventsHandle, (void*)&event, (TickType_t)0);
-
-          if (new_broker_uri_size <= 0) {
-            printf("Erasing mqtt_broker_uri key\n");
-            nvs_err = nvs_erase_key(nvs_handle, "mqtt_broker_uri");
-          }
-          else {
-            printf("Setting mqtt_broker_uri key in nvram to %s\n", broker_uri_j->valuestring);
-            nvs_err = nvs_set_str(nvs_handle, "mqtt_broker_uri", broker_uri_j->valuestring);
-          }
-
-          if (nvs_err != ESP_OK) {
-            printf("Failed to write the MQTT broker URI to nvram!\n");
-            printf("Continuing execution anyway but it will not be persisted to nvram\n");
-          }
-          else {
-            nvs_commit(nvs_handle);
-          }
-
+        if (new_broker_uri_size > 0) {
+          strncpy(mqtt_cfg.broker.address.uri,
+                  broker_uri_j->valuestring,
+                  new_broker_uri_size);
         }
+        else {
+          char default_broker_uri[MQTT_BROKER_URI_MAX_SIZE] = CONFIG_BROKER_URI;
+          printf("Empty broker_uri detected, so we are resetting it to the default\n");
+          strncpy(mqtt_cfg.broker.address.uri,
+                  default_broker_uri,
+                  (sizeof default_broker_uri));
+        }
+
+        event.restart = 1;
+        xQueueSend(mqttHandlerEventsHandle, (void*)&event, (TickType_t)0);
+
+        if (new_broker_uri_size <= 0) {
+          printf("Erasing mqtt_broker_uri key\n");
+          nvs_err = nvs_erase_key(nvs_handle, "mqtt_broker_uri");
+        }
+        else {
+          printf("Setting mqtt_broker_uri key in nvram to %s\n", broker_uri_j->valuestring);
+          nvs_err = nvs_set_str(nvs_handle, "mqtt_broker_uri", broker_uri_j->valuestring);
+        }
+
+        if (nvs_err != ESP_OK) {
+          printf("Failed to write the MQTT broker URI to nvram!\n");
+          printf("Continuing execution anyway but it will not be persisted to nvram\n");
+        }
+        else {
+          nvs_commit(nvs_handle);
+        }
+
       }
-      else {
-        printf("Got something that was not a string in update_mqtt_cfg_handler\n");
-      }
+    }
+    else {
+      printf("Got something that was not a string in update_mqtt_cfg_handler\n");
     }
   }
   else {
@@ -759,13 +757,11 @@ fans_on_handler(httpd_req_t *req) {
   cJSON *json = cJSON_ParseWithLength(req_body, body_size);
   cJSON *fan_time_j = NULL;
 
-  if (json != NULL) {
-    if (cJSON_IsObject(json)) {
-      fan_time_j = cJSON_GetObjectItemCaseSensitive(json, "fan");
-      if (cJSON_IsNumber(fan_time_j)) {
-        printf("Running fans: time = %d\n", fan_time_j->valueint);
-        run_fans(fan_time_j->valueint, MANUAL_PRIORITY);
-      }
+  if (json != NULL && cJSON_IsObject(json)) {
+    fan_time_j = cJSON_GetObjectItemCaseSensitive(json, "fan");
+    if (cJSON_IsNumber(fan_time_j)) {
+      printf("Running fans: time = %d\n", fan_time_j->valueint);
+      run_fans(fan_time_j->valueint, MANUAL_PRIORITY);
     }
   }
 
