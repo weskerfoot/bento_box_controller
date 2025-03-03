@@ -237,7 +237,6 @@ sensor_manager_task_function(void *params) {
   // It also tests if the sensor values meet the threshold to run the air filter fans
   // If so, it will send a message to the task that manages the fans with the priority of the sensors
   // Different things have different "priorities", meaning the fans will always run if that thing has a higher priority
-  // goes over some threshold even if a lower priority one did not meet the threshold to run the fans.
   nvs_handle_t nvs_handle;
   esp_err_t nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
   esp_err_t nvs_set_voc_max_err;
@@ -598,6 +597,8 @@ set_sensor_thresholds_handler(httpd_req_t *req) {
 
 static esp_err_t
 get_sensor_data_handler(httpd_req_t *req) {
+  // JSON api endpoint for getting sensor values
+  // Useful for monitoring the controller
   time_t now;
   struct tm timeinfo;
   time(&now);
@@ -659,6 +660,10 @@ get_sensor_data_handler(httpd_req_t *req) {
 
 static esp_err_t
 update_mqtt_cfg_handler(httpd_req_t *req) {
+  // Endpoint for updating the MQTT broker URI
+  // Useful if you reset the PIN code and need to change it
+  // Or if the MQTT server IP address changes
+  // TODO: maybe we could use mDNS to resolve it?
   nvs_handle_t nvs_handle;
   esp_err_t nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
 
@@ -739,6 +744,9 @@ update_mqtt_cfg_handler(httpd_req_t *req) {
 
 static esp_err_t
 fans_on_handler(httpd_req_t *req) {
+  // JSON endpoint for manually turning the fans on/off
+  // It expects you to specify for how long they will run too
+  // e.g. {"fan_time" : 100} where 100 is in seconds
   printf("fans_on_handler executed\n");
   char req_body[HTTPD_RESP_SIZE+1] = {0};
   char resp[HTTPD_RESP_SIZE] = {1};
@@ -759,7 +767,7 @@ fans_on_handler(httpd_req_t *req) {
   cJSON *fan_time_j = NULL;
 
   if (json != NULL && cJSON_IsObject(json)) {
-    fan_time_j = cJSON_GetObjectItemCaseSensitive(json, "fan");
+    fan_time_j = cJSON_GetObjectItemCaseSensitive(json, "fan_time");
     if (cJSON_IsNumber(fan_time_j)) {
       printf("Running fans: time = %d\n", fan_time_j->valueint);
       run_fans(fan_time_j->valueint, MANUAL_PRIORITY);
