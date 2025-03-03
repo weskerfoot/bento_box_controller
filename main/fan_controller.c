@@ -51,7 +51,7 @@ SemaphoreHandle_t sensorSemaphore = NULL; // Used to control access to sensors
 
 static void
 set_fan(int fan_num, int state) {
-    // Set duty to 100%
+    // Set duty cycle to either 100% or 0% depending on the state
     ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, fan_num, state == 1 ? LEDC_DUTY: 0));
     // Update duty to apply the new value
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, fan_num));
@@ -77,6 +77,8 @@ initSGP40() {
 }
 
 // MQTT callback
+// Handles messages from the printer itself
+// This mainly just monitors the bed temperature at the moment
 static void
 mqtt_event_handler(void *handler_args,
                    esp_event_base_t base,
@@ -190,9 +192,8 @@ mqtt_event_handler(void *handler_args,
 
 static void
 mqtt_event_handler_function(void *params) {
-  ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
+  // This handler handles restarting the MQTT client if the broker URI changes
   esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
-  /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
   esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
   int is_client_running = 0;
 
@@ -229,13 +230,14 @@ mqtt_event_handler_function(void *params) {
   }
 }
 
-static TickType_t
-make_delay(int seconds) {
-  return (1000*seconds) / portTICK_PERIOD_MS;
-}
-
 static void
 sensor_manager_task_function(void *params) {
+  // This task monitors various sensors (VOC, temperature, humidity, bed temperature)
+  // It also handles serializing them to the NVS (non-volatile storage) so that they persist across reboots
+  // It also tests if the sensor values meet the threshold to run the air filter fans
+  // If so, it will send a message to the task that manages the fans with the priority of the given sensor
+  // Different sensors have different "priorities", meaning the fans will always run if that sensor value
+  // goes over some threshold even if a lower priority one did not meet the threshold to run the fans.
   nvs_handle_t nvs_handle;
   esp_err_t nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
   esp_err_t nvs_set_voc_max_err;
@@ -363,7 +365,7 @@ sensor_manager_task_function(void *params) {
           #ifdef CONFIG_DEBUG_MODE_ENABLED
             printf("voc_index = %d\n", voc_index);
           #endif
-            if (voc_index > voc_max_threshold) { // TODO, make threshold configurable, test with ABS, etc
+            if (voc_index > voc_max_threshold) {
               run_fans_forever(SENSOR_PRIORITY);
             }
             if (voc_index <= voc_min_threshold) {
@@ -501,7 +503,6 @@ set_sensor_thresholds_handler(httpd_req_t *req) {
 
   size_t body_size = MIN(req->content_len, (sizeof(req_body)-1));
 
-  // Receive body and do error handling
   int ret = httpd_req_recv(req, req_body, body_size);
 
   // if ret == 0 then no data
@@ -719,7 +720,6 @@ update_mqtt_cfg_handler(httpd_req_t *req) {
         else {
           nvs_commit(nvs_handle);
         }
-
       }
     }
     else {
