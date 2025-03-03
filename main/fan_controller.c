@@ -235,8 +235,8 @@ sensor_manager_task_function(void *params) {
   // This task monitors various sensors (VOC, temperature, humidity, bed temperature)
   // It also handles serializing them to the NVS (non-volatile storage) so that they persist across reboots
   // It also tests if the sensor values meet the threshold to run the air filter fans
-  // If so, it will send a message to the task that manages the fans with the priority of the given sensor
-  // Different sensors have different "priorities", meaning the fans will always run if that sensor value
+  // If so, it will send a message to the task that manages the fans with the priority of the sensors
+  // Different things have different "priorities", meaning the fans will always run if that thing has a higher priority
   // goes over some threshold even if a lower priority one did not meet the threshold to run the fans.
   nvs_handle_t nvs_handle;
   esp_err_t nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
@@ -399,10 +399,11 @@ sensor_manager_task_function(void *params) {
 
 static void
 fan_runner_task_function(void *params) {
+  // This task handles actually setting the fans on/off
+  // It can be either manually initiated (via the HTTP api) or from a sensor
+  // which is why this must run in its own task independent of the sensor monitor or http callbacks
   struct fan_event fanMessage;
   int current_priority = LOWEST_PRIORITY;
-
-  printf("Task started\n");
 
   configASSERT( ( uint32_t ) params == 1UL );
 
