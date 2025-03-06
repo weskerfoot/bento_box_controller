@@ -125,13 +125,6 @@ struct mqtt_handler_event {
   int restart;
 };
 
-static void wifi_init_sta(void);
-static void run_fans_forever();
-static void run_fans(int, int);
-static void stop_running_fans(int);
-static void obtain_time(void);
-static void initialize_sntp(void);
-
 static size_t
 get_string_from_nvs(nvs_handle_t nvs_handle,
                     size_t max_output_size,
@@ -168,6 +161,32 @@ get_int32_from_nvs(nvs_handle_t nvs_handle,
     }
     printf("Restored int32 value from nvs, value = %d\n", *output);
     return nvs_get_i32_err;
+}
+
+static esp_err_t
+nvs_set_f32(nvs_handle_t nvs_handle,
+                const char* key_name,
+                float value) {
+  // Assumes floats are 32 bit, which is always going to be the case on an esp32
+  uint32_t copy_to = 0;
+  memcpy(&copy_to, &value, 4);
+  return nvs_set_u32(nvs_handle, key_name, copy_to);
+}
+
+static esp_err_t
+nvs_get_f32(nvs_handle_t nvs_handle,
+            const char* key_name,
+            float *output) {
+  // Assumes floats are 32 bit, which is always going to be the case on an esp32
+  uint32_t u32_output = 0;
+  esp_err_t nvs_get_u32_err = nvs_get_u32(nvs_handle, key_name, &u32_output);
+  if (nvs_get_u32_err != ESP_OK) {
+    printf("f32 could not be read from nvram, using existing value\n");
+    return nvs_get_u32_err;
+  }
+  memcpy(output, &u32_output, 4);
+  printf("Restored float32 value from nvs, value = %f\n", *output);
+  return nvs_get_u32_err;
 }
 
 static TickType_t

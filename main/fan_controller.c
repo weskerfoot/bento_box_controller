@@ -1,5 +1,13 @@
 #include "./fan_controller.h"
 
+// Forward declarations
+static void wifi_init_sta(void);
+static void run_fans_forever();
+static void run_fans(int, int);
+static void stop_running_fans(int);
+static void obtain_time(void);
+static void initialize_sntp(void);
+
 static char broker_uri[MQTT_BROKER_URI_MAX_SIZE] = CONFIG_BROKER_URI;
 
 static esp_mqtt_client_config_t mqtt_cfg = {
@@ -241,18 +249,21 @@ sensor_manager_task_function(void *params) {
   esp_err_t nvs_err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
   esp_err_t nvs_set_voc_max_err;
   esp_err_t nvs_set_voc_min_err;
+  esp_err_t nvs_set_btemp_min_err;
+  esp_err_t nvs_set_btemp_max_err;
 
   int voc_max_threshold = VOC_MAX_THRESHOLD_DEFAULT;
   int voc_min_threshold = VOC_MAX_THRESHOLD_DEFAULT > 10 ? VOC_MAX_THRESHOLD_DEFAULT - 10 : 0;
+  float bed_temper_min_threshold = 83.0;
+  float bed_temper_max_threshold = 85.0;
 
   get_int32_from_nvs(nvs_handle, "voc_max_thresh", &voc_max_threshold);
   get_int32_from_nvs(nvs_handle, "voc_min_thresh", &voc_min_threshold);
+  nvs_get_f32(nvs_handle, "bt_max_thresh", &bed_temper_max_threshold);
+  nvs_get_f32(nvs_handle, "bt_min_thresh", &bed_temper_min_threshold);
 
   printf("Starting sensor manager\n");
   printf("voc_max_threshold = %d, voc_min_threshold = %d\n", voc_max_threshold, voc_min_threshold);
-
-  float bed_temper_min_threshold = 83.0;
-  float bed_temper_max_threshold = 83.0;
 
   printf("bed_temper_max_threshold = %f, bed_temper_min_threshold = %f\n",
          bed_temper_max_threshold,
@@ -260,7 +271,11 @@ sensor_manager_task_function(void *params) {
 
   double bed_temper = 0.0f;
 
-  struct threshold_event thresholdMessage = {0};
+  // These have to be initialized because they're used to compare against, and might be unset the first time
+  struct threshold_event thresholdMessage = {.bed_temper_min_threshold = bed_temper_min_threshold,
+                                             .bed_temper_max_threshold = bed_temper_max_threshold,
+                                             .voc_max_threshold = voc_max_threshold,
+                                             .voc_min_threshold = voc_min_threshold};
   struct printer_event printerEventMessage = {0};
 
   while (1) {
@@ -276,7 +291,7 @@ sensor_manager_task_function(void *params) {
       if (xQueueReceive(thresholdEventsHandle, &thresholdMessage, (TickType_t)sensor_TIMER_DELAY) == pdPASS) {
         if (thresholdMessage.voc_max_threshold > 0 && thresholdMessage.voc_max_threshold <= 500) {
           voc_max_threshold = thresholdMessage.voc_max_threshold;
-          nvs_set_voc_max_err = nvs_erase_key(nvs_handle, "vox_max_thresh");
+          nvs_set_voc_max_err = nvs_erase_key(nvs_handle, "voc_max_thresh");
           nvs_set_voc_max_err = nvs_set_i32(nvs_handle, "voc_max_thresh", (int32_t)voc_max_threshold);
           if (nvs_set_voc_max_err != ESP_OK) {
             printf("Error setting voc max to value %d\n", voc_max_threshold);
@@ -291,7 +306,7 @@ sensor_manager_task_function(void *params) {
           printf("current voc_max_threshold = %d, current voc_min_threshold = %d\n", voc_max_threshold, voc_min_threshold);
         #endif
         }
-        if (thresholdMessage.voc_min_threshold > 0 && thresholdMessage.voc_min_threshold < voc_max_threshold) {
+        if (thresholdMessage.voc_min_threshold > 0 && thresholdMessage.voc_min_threshold < thresholdMessage.voc_max_threshold) {
           voc_min_threshold = thresholdMessage.voc_min_threshold;
           nvs_set_voc_max_err = nvs_erase_key(nvs_handle, "voc_min_thresh");
           nvs_set_voc_min_err = nvs_set_i32(nvs_handle, "voc_min_thresh", (int32_t)voc_min_threshold);
@@ -308,9 +323,17 @@ sensor_manager_task_function(void *params) {
           printf("current voc_max_threshold = %d, current voc_min_threshold = %d\n", voc_max_threshold, voc_min_threshold);
         #endif
         }
-
-        if (thresholdMessage.bed_temper_min_threshold > 0.0f && thresholdMessage.bed_temper_min_threshold <= bed_temper_max_threshold) {
+        if (thresholdMessage.bed_temper_min_threshold > 0.0f &&
+            thresholdMessage.bed_temper_min_threshold <= thresholdMessage.bed_temper_max_threshold) {
           bed_temper_min_threshold = thresholdMessage.bed_temper_min_threshold;
+          nvs_set_btemp_min_err = nvs_erase_key(nvs_handle, "bt_min_thresh");
+          nvs_set_btemp_min_err = nvs_set_f32(nvs_handle, "bt_min_thresh", bed_temper_min_threshold);
+          if (nvs_set_btemp_min_err != ESP_OK) {
+            printf("Error setting bed temper min to value %f, error code = %d\n", bed_temper_min_threshold, nvs_set_btemp_min_err);
+          }
+          else {
+            nvs_commit(nvs_handle);
+          }
         }
         else {
         #ifdef CONFIG_DEBUG_MODE_ENABLED
@@ -321,8 +344,17 @@ sensor_manager_task_function(void *params) {
         #endif
         }
 
-        if (thresholdMessage.bed_temper_max_threshold > 0.0f && thresholdMessage.bed_temper_max_threshold >= bed_temper_min_threshold) {
+        if (thresholdMessage.bed_temper_max_threshold > 0.0f &&
+            thresholdMessage.bed_temper_max_threshold >= thresholdMessage.bed_temper_min_threshold) {
           bed_temper_max_threshold = thresholdMessage.bed_temper_max_threshold;
+          nvs_set_btemp_max_err = nvs_erase_key(nvs_handle, "bt_max_thresh");
+          nvs_set_btemp_max_err = nvs_set_f32(nvs_handle, "bt_max_thresh", bed_temper_max_threshold);
+          if (nvs_set_btemp_max_err != ESP_OK) {
+            printf("Error setting bed temper max to value %f, error code = %d\n", bed_temper_max_threshold, nvs_set_btemp_max_err);
+          }
+          else {
+            nvs_commit(nvs_handle);
+          }
         }
         else {
         #ifdef CONFIG_DEBUG_MODE_ENABLED
