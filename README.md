@@ -37,11 +37,20 @@ Run `idf.py -p PORT flash monitor` to build, flash and monitor the project.
 See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/index.html) for full steps to configure and use ESP-IDF to build projects.
 
 ### Photos
-Patially assembled with DC to DC converters that run on the printer's power
+#### Patially assembled with DC to DC converters that run on the printer's power
 supply (so e.g. you can control them both using a relay).
 ![photo of partial assembly](./photos/controller_open.jpeg)
-The controller completely installed and sitting on top of the printer itself.
+#### The controller completely installed and sitting on top of the printer itself.
 ![photo of complete assembly](./photos/controller_installed.jpeg)
-The VOC sensor with a case I printed for it (this goes into the back of the
+#### The VOC sensor with a case I printed for it (this goes into the back of the
 printer).
 ![VOC sensor](./photos/voc_sensor.jpeg)
+
+
+## Hardware I used
+- esp32 development board (any of them will do, but the pinout varies between them so you have to figure that out yourself)
+- sht-30 temperature and humidity sensor [from here](https://www.adafruit.com/product/4099)
+- DC-DC converter that takes the 24v from the printer power supply, from [here](https://www.digikey.ca/en/products/detail/sparkfun-electronics/COM-18376/15195189)
+- Fans [like these](https://www.digikey.ca/en/products/detail/wakefield-vette/DC0402012V2B-2T0/11593034) which run on 12v directly from the fan controller.
+- For controlling the fans you can use any MOSFETs that have a suitable gate threshold voltage (VGS) of 3v and can handle the amount of voltage and current needed to run the fans.
+- For powering the microcontroller you need another buck converter which will connect to the larger one and drop it down to 3v. E.g. any of [these](https://www.amazon.ca/BULVACK-LM2596-Converter-Module-1-25V-30V/dp/B07VVXF7YX) would work.
