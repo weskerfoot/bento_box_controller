@@ -37,13 +37,11 @@ Run `idf.py -p PORT flash monitor` to build, flash and monitor the project.
 See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/latest/get-started/index.html) for full steps to configure and use ESP-IDF to build projects.
 
 ### Photos
-#### Patially assembled with DC to DC converters that run on the printer's power
-supply (so e.g. you can control them both using a relay).
+#### Patially assembled with DC to DC converters that run on the printer's power supply
 ![photo of partial assembly](./photos/controller_open.jpeg)
 #### The controller completely installed and sitting on top of the printer itself.
 ![photo of complete assembly](./photos/controller_installed.jpeg)
-#### The VOC sensor with a case I printed for it (this goes into the back of the
-printer).
+#### The VOC sensor with a case I printed for it.
 ![VOC sensor](./photos/voc_sensor.jpeg)
 
 
