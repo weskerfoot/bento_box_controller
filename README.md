@@ -49,7 +49,7 @@ See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/l
 - esp32 development board (any of them will do, but the pinout varies between them so you have to figure that out yourself)
 - sht-30 temperature and humidity sensor [from here](https://www.adafruit.com/product/4099)
 - sgp40 air quality sensor [from here](https://www.sparkfun.com/sparkfun-air-quality-sensor-sgp40-qwiic.html)
-- DC-DC converter that takes the 24v from the printer power supply, from [here](https://www.digikey.ca/en/products/detail/sparkfun-electronics/COM-18376/15195189)
-- Fans [like these](https://www.digikey.ca/en/products/detail/wakefield-vette/DC0402012V2B-2T0/11593034) which run on 12v directly from the fan controller.
+- DC-DC converter that takes the 24v from the printer power supply and drops it down to 12v, from [here](https://www.digikey.ca/en/products/detail/sparkfun-electronics/COM-18376/15195189)
+- Fans [like these](https://www.digikey.ca/en/products/detail/wakefield-vette/DC0402012V2B-2T0/11593034) which run on 12v from the above regulator.
+- For powering the microcontroller you need another buck converter which will connect to the larger one and drop it down to 3v. E.g. any of [these](https://www.amazon.ca/BULVACK-LM2596-Converter-Module-1-25V-30V/dp/B07VVXF7YX) would work. Make sure to tune it with the trimpot and once you're happy glue the trimpot adjustor with some silicone glue to keep it from changing due to vibration from the printer.
 - For controlling the fans you can use any MOSFETs that have a suitable gate threshold voltage (VGS) of 3v and can handle the amount of voltage and current needed to run the fans.
-- For powering the microcontroller you need another buck converter which will connect to the larger one and drop it down to 3v. E.g. any of [these](https://www.amazon.ca/BULVACK-LM2596-Converter-Module-1-25V-30V/dp/B07VVXF7YX) would work.
