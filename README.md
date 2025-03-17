@@ -48,6 +48,7 @@ See the [Getting Started Guide](https://docs.espressif.com/projects/esp-idf/en/l
 ## Hardware I used
 - esp32 development board (any of them will do, but the pinout varies between them so you have to figure that out yourself)
 - sht-30 temperature and humidity sensor [from here](https://www.adafruit.com/product/4099)
+- sgp40 air quality sensor [from here](https://www.sparkfun.com/sparkfun-air-quality-sensor-sgp40-qwiic.html)
 - DC-DC converter that takes the 24v from the printer power supply, from [here](https://www.digikey.ca/en/products/detail/sparkfun-electronics/COM-18376/15195189)
 - Fans [like these](https://www.digikey.ca/en/products/detail/wakefield-vette/DC0402012V2B-2T0/11593034) which run on 12v directly from the fan controller.
 - For controlling the fans you can use any MOSFETs that have a suitable gate threshold voltage (VGS) of 3v and can handle the amount of voltage and current needed to run the fans.
